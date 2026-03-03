@@ -1,0 +1,260 @@
+---
+title: 'Work Class'
+description: 'API reference for the Work class - job submission'
+---
+
+## Overview
+
+The `Work` class handles job submission to the nrvna-ai workspace. It creates job directories with prompts, images, and metadata, then atomically publishes them for processing.
+
+```cpp
+#include <nrvna/work.hpp>
+```
+
+## Class Definition
+
+```cpp
+namespace nrvnaai {
+    class Work final {
+    public:
+        explicit Work(const std::filesystem::path& workspace, bool createIfMissing = true);
+        
+        Work(const Work&) = delete;
+        Work& operator=(const Work&) = delete;
+        Work(Work&&) noexcept = default;
+        Work& operator=(Work&&) noexcept = default;
+        
+        [[nodiscard]] SubmitResult submit(const std::string& prompt, JobType type = JobType::Text);
+        [[nodiscard]] SubmitResult submit(const std::string& prompt, const std::vector<std::filesystem::path>& imagePaths);
+        
+        void setMaxSize(std::size_t maxBytes) noexcept;
+        [[nodiscard]] std::size_t maxSize() const noexcept;
+    };
+}
+```
+
+## Constructor
+
+### Work
+
+```cpp
+explicit Work(const std::filesystem::path& workspace, bool createIfMissing = true)
+```
+
+Constructs a Work instance for submitting jobs to the specified workspace.
+
+<ParamField path="workspace" type="const std::filesystem::path&" required>
+  Path to the workspace directory where jobs will be submitted
+</ParamField>
+
+<ParamField path="createIfMissing" type="bool" default="true">
+  Whether to create the workspace directory if it doesn't exist
+</ParamField>
+
+**Example:**
+
+```cpp
+// Create workspace if missing
+Work work("/tmp/nrvna-workspace");
+
+// Fail if workspace doesn't exist
+Work work("/tmp/nrvna-workspace", false);
+```
+
+## Methods
+
+### submit (Text/Embed)
+
+```cpp
+[[nodiscard]] SubmitResult submit(const std::string& prompt, JobType type = JobType::Text)
+```
+
+Submits a text-based job (text generation or embedding).
+
+<ParamField path="prompt" type="const std::string&" required>
+  The text prompt for the job. Must not exceed `maxSize()` bytes.
+</ParamField>
+
+<ParamField path="type" type="JobType" default="JobType::Text">
+  Type of job: `JobType::Text` for text generation or `JobType::Embed` for embeddings
+</ParamField>
+
+<ResponseField name="SubmitResult" type="SubmitResult">
+  Result object containing:
+  - `ok` (bool): Whether submission succeeded
+  - `id` (JobId): Generated job identifier if successful
+  - `error` (SubmissionError): Error code if failed
+  - `message` (std::string): Human-readable error message
+</ResponseField>
+
+**Example:**
+
+```cpp
+Work work("/tmp/nrvna-workspace");
+
+// Text generation
+auto result = work.submit("Explain neural networks");
+if (result) {
+    std::cout << "Job submitted: " << result.id << std::endl;
+} else {
+    std::cerr << "Failed: " << result.message << std::endl;
+}
+
+// Embedding generation
+auto embedResult = work.submit("Hello world", JobType::Embed);
+```
+
+### submit (Vision)
+
+```cpp
+[[nodiscard]] SubmitResult submit(const std::string& prompt, const std::vector<std::filesystem::path>& imagePaths)
+```
+
+Submits a vision job with text prompt and images.
+
+<ParamField path="prompt" type="const std::string&" required>
+  The text prompt describing the vision task
+</ParamField>
+
+<ParamField path="imagePaths" type="const std::vector<std::filesystem::path>&" required>
+  Paths to image files to include with the job
+</ParamField>
+
+<ResponseField name="SubmitResult" type="SubmitResult">
+  Result object (same structure as text submit)
+</ResponseField>
+
+**Example:**
+
+```cpp
+Work work("/tmp/nrvna-workspace");
+
+std::vector<std::filesystem::path> images = {
+    "/path/to/image1.jpg",
+    "/path/to/image2.png"
+};
+
+auto result = work.submit("Describe these images", images);
+if (result) {
+    std::cout << "Vision job submitted: " << result.id << std::endl;
+}
+```
+
+### setMaxSize
+
+```cpp
+void setMaxSize(std::size_t maxBytes) noexcept
+```
+
+Sets the maximum allowed prompt size in bytes.
+
+<ParamField path="maxBytes" type="std::size_t" required>
+  Maximum size in bytes (default is 10,000,000 bytes = 10MB)
+</ParamField>
+
+**Example:**
+
+```cpp
+Work work("/tmp/nrvna-workspace");
+work.setMaxSize(5'000'000); // 5MB limit
+```
+
+### maxSize
+
+```cpp
+[[nodiscard]] std::size_t maxSize() const noexcept
+```
+
+Returns the current maximum prompt size in bytes.
+
+<ResponseField name="return" type="std::size_t">
+  Current maximum size in bytes
+</ResponseField>
+
+**Example:**
+
+```cpp
+Work work("/tmp/nrvna-workspace");
+std::cout << "Max size: " << work.maxSize() << " bytes" << std::endl;
+```
+
+## Supporting Types
+
+### JobType
+
+```cpp
+enum class JobType : uint8_t {
+    Text = 0,   // Text generation
+    Embed = 1,  // Embedding generation
+    Vision = 2  // Vision/multimodal
+};
+```
+
+### SubmissionError
+
+```cpp
+enum class SubmissionError : uint8_t {
+    None = 0,           // No error
+    IoError,            // Filesystem I/O error
+    InvalidSize,        // Prompt exceeds maxSize
+    InvalidContent,     // Invalid prompt or image content
+    WorkspaceError      // Workspace not accessible
+};
+```
+
+### SubmitResult
+
+```cpp
+struct SubmitResult {
+    bool ok = false;
+    JobId id;
+    SubmissionError error = SubmissionError::None;
+    std::string message;
+    explicit operator bool() const noexcept { return ok; }
+};
+```
+
+<ParamField path="ok" type="bool">
+  True if submission succeeded, false otherwise
+</ParamField>
+
+<ParamField path="id" type="JobId">
+  Generated job identifier (only valid if `ok` is true)
+</ParamField>
+
+<ParamField path="error" type="SubmissionError">
+  Error code if submission failed
+</ParamField>
+
+<ParamField path="message" type="std::string">
+  Human-readable error or success message
+</ParamField>
+
+**Example:**
+
+```cpp
+auto result = work.submit("Test prompt");
+if (result) {  // Uses operator bool()
+    std::cout << "Success: " << result.id << std::endl;
+} else {
+    switch (result.error) {
+        case SubmissionError::InvalidSize:
+            std::cerr << "Prompt too large" << std::endl;
+            break;
+        case SubmissionError::IoError:
+            std::cerr << "I/O error: " << result.message << std::endl;
+            break;
+        default:
+            std::cerr << "Error: " << result.message << std::endl;
+    }
+}
+```
+
+## Notes
+
+- The `Work` class is **move-only** (cannot be copied)
+- All submit methods use `[[nodiscard]]` - you must check the result
+- Job IDs are generated automatically using UUIDs
+- Jobs are published atomically to prevent race conditions
+- Failed job submissions are automatically cleaned up
+- Default maximum prompt size is 10MB

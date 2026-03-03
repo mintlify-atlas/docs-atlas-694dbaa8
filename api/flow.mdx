@@ -1,0 +1,375 @@
+---
+title: 'Flow Class'
+description: 'API reference for the Flow class - job retrieval and monitoring'
+---
+
+## Overview
+
+The `Flow` class retrieves job results and monitors job status from the nrvna-ai workspace. It provides methods to query individual jobs, list recent jobs, and check completion status.
+
+```cpp
+#include <nrvna/flow.hpp>
+```
+
+## Class Definition
+
+```cpp
+namespace nrvnaai {
+    class Flow {
+    public:
+        explicit Flow(const std::filesystem::path& workspace) noexcept;
+        
+        Flow(const Flow&) = delete;
+        Flow& operator=(const Flow&) = delete;
+        Flow(Flow&&) noexcept = default;
+        Flow& operator=(Flow&&) noexcept = default;
+        
+        [[nodiscard]] std::optional<Job> latest() const noexcept;
+        [[nodiscard]] std::optional<Job> get(const JobId& id) const noexcept;
+        [[nodiscard]] std::vector<Job> list(std::size_t max = 10) const noexcept;
+        [[nodiscard]] Status status(const JobId& id) const noexcept;
+        
+        [[nodiscard]] bool exists(const JobId& id) const noexcept;
+        [[nodiscard]] std::optional<std::string> error(const JobId& id) const;
+        [[nodiscard]] std::optional<std::string> prompt(const JobId& id) const;
+    };
+}
+```
+
+## Constructor
+
+### Flow
+
+```cpp
+explicit Flow(const std::filesystem::path& workspace) noexcept
+```
+
+Constructs a Flow instance for reading jobs from the specified workspace.
+
+<ParamField path="workspace" type="const std::filesystem::path&" required>
+  Path to the workspace directory to monitor
+</ParamField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+```
+
+## Methods
+
+### latest
+
+```cpp
+[[nodiscard]] std::optional<Job> latest() const noexcept
+```
+
+Retrieves the most recently completed job based on timestamp.
+
+<ResponseField name="return" type="std::optional<Job>">
+  The latest job if any exist, or `std::nullopt` if no jobs found
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+
+auto job = flow.latest();
+if (job) {
+    std::cout << "Latest job: " << job->id << std::endl;
+    std::cout << "Status: " << static_cast<int>(job->status) << std::endl;
+    if (job->status == Status::Done) {
+        std::cout << "Result: " << job->content << std::endl;
+    }
+} else {
+    std::cout << "No jobs found" << std::endl;
+}
+```
+
+### get
+
+```cpp
+[[nodiscard]] std::optional<Job> get(const JobId& id) const noexcept
+```
+
+Retrieves a specific job by ID.
+
+<ParamField path="id" type="const JobId&" required>
+  The job identifier to retrieve
+</ParamField>
+
+<ResponseField name="return" type="std::optional<Job>">
+  The job if found, or `std::nullopt` if not found
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+
+JobId jobId = "job-id-from-submit";
+auto job = flow.get(jobId);
+if (job) {
+    std::cout << "Found job with status: " << static_cast<int>(job->status) << std::endl;
+}
+```
+
+### list
+
+```cpp
+[[nodiscard]] std::vector<Job> list(std::size_t max = 10) const noexcept
+```
+
+Lists recent jobs, sorted by timestamp (most recent first).
+
+<ParamField path="max" type="std::size_t" default="10">
+  Maximum number of jobs to return
+</ParamField>
+
+<ResponseField name="return" type="std::vector<Job>">
+  Vector of jobs, sorted by timestamp descending
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+
+// Get 20 most recent jobs
+auto jobs = flow.list(20);
+for (const auto& job : jobs) {
+    std::cout << "Job " << job.id << ": ";
+    switch (job.status) {
+        case Status::Queued:
+            std::cout << "Queued" << std::endl;
+            break;
+        case Status::Running:
+            std::cout << "Running" << std::endl;
+            break;
+        case Status::Done:
+            std::cout << "Done - " << job.content << std::endl;
+            break;
+        case Status::Failed:
+            std::cout << "Failed" << std::endl;
+            break;
+        case Status::Missing:
+            std::cout << "Missing" << std::endl;
+            break;
+    }
+}
+```
+
+### status
+
+```cpp
+[[nodiscard]] Status status(const JobId& id) const noexcept
+```
+
+Checks the current status of a specific job.
+
+<ParamField path="id" type="const JobId&" required>
+  The job identifier to check
+</ParamField>
+
+<ResponseField name="return" type="Status">
+  Current job status: `Queued`, `Running`, `Done`, `Failed`, or `Missing`
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+JobId jobId = "job-id-from-submit";
+
+// Poll until complete
+while (true) {
+    auto status = flow.status(jobId);
+    if (status == Status::Done || status == Status::Failed) {
+        break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+```
+
+### exists
+
+```cpp
+[[nodiscard]] bool exists(const JobId& id) const noexcept
+```
+
+Checks if a job exists in the workspace.
+
+<ParamField path="id" type="const JobId&" required>
+  The job identifier to check
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  True if the job exists, false otherwise
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+
+if (flow.exists("some-job-id")) {
+    std::cout << "Job exists" << std::endl;
+}
+```
+
+### error
+
+```cpp
+[[nodiscard]] std::optional<std::string> error(const JobId& id) const
+```
+
+Retrieves the error message for a failed job.
+
+<ParamField path="id" type="const JobId&" required>
+  The job identifier
+</ParamField>
+
+<ResponseField name="return" type="std::optional<std::string>">
+  Error message if job failed and error exists, or `std::nullopt` otherwise
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+JobId jobId = "failed-job-id";
+
+if (flow.status(jobId) == Status::Failed) {
+    auto err = flow.error(jobId);
+    if (err) {
+        std::cerr << "Job failed: " << *err << std::endl;
+    }
+}
+```
+
+### prompt
+
+```cpp
+[[nodiscard]] std::optional<std::string> prompt(const JobId& id) const
+```
+
+Retrieves the original prompt for a job.
+
+<ParamField path="id" type="const JobId&" required>
+  The job identifier
+</ParamField>
+
+<ResponseField name="return" type="std::optional<std::string>">
+  The prompt text if available, or `std::nullopt` if not found
+</ResponseField>
+
+**Example:**
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+JobId jobId = "some-job-id";
+
+auto promptText = flow.prompt(jobId);
+if (promptText) {
+    std::cout << "Original prompt: " << *promptText << std::endl;
+}
+```
+
+## Supporting Types
+
+### Job
+
+```cpp
+struct Job {
+    JobId id;
+    Status status;
+    std::string content;
+    std::chrono::system_clock::time_point timestamp;
+};
+```
+
+<ParamField path="id" type="JobId">
+  Unique job identifier
+</ParamField>
+
+<ParamField path="status" type="Status">
+  Current job status (Queued, Running, Done, Failed, or Missing)
+</ParamField>
+
+<ParamField path="content" type="std::string">
+  Result content if status is Done, or error message if Failed
+</ParamField>
+
+<ParamField path="timestamp" type="std::chrono::system_clock::time_point">
+  Job creation or completion timestamp
+</ParamField>
+
+**Example:**
+
+```cpp
+auto job = flow.latest();
+if (job) {
+    // Access job fields
+    std::cout << "ID: " << job->id << std::endl;
+    std::cout << "Status: " << static_cast<int>(job->status) << std::endl;
+    
+    // Format timestamp
+    auto time = std::chrono::system_clock::to_time_t(job->timestamp);
+    std::cout << "Time: " << std::ctime(&time);
+    
+    // Get content
+    if (job->status == Status::Done) {
+        std::cout << "Result: " << job->content << std::endl;
+    }
+}
+```
+
+## Usage Patterns
+
+### Polling for Completion
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+JobId jobId = submitResult.id;
+
+while (true) {
+    auto status = flow.status(jobId);
+    
+    if (status == Status::Done) {
+        auto job = flow.get(jobId);
+        std::cout << "Result: " << job->content << std::endl;
+        break;
+    } else if (status == Status::Failed) {
+        auto err = flow.error(jobId);
+        std::cerr << "Failed: " << err.value_or("Unknown error") << std::endl;
+        break;
+    }
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+```
+
+### Monitoring Multiple Jobs
+
+```cpp
+Flow flow("/tmp/nrvna-workspace");
+
+// Check all recent jobs
+auto jobs = flow.list(50);
+for (const auto& job : jobs) {
+    if (job.status == Status::Failed) {
+        auto err = flow.error(job.id);
+        std::cerr << "Job " << job.id << " failed: " << err.value_or("Unknown") << std::endl;
+    }
+}
+```
+
+## Notes
+
+- The `Flow` class is **move-only** (cannot be copied)
+- All query methods use `[[nodiscard]]` - you should check return values
+- The workspace is read-only from Flow's perspective
+- Job listing is sorted by timestamp (most recent first)
+- Status checks are lightweight filesystem operations
+- Content and error retrieval involve file I/O

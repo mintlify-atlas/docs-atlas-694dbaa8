@@ -1,0 +1,464 @@
+---
+title: Filesystem Queue Design
+description: How nrvna-ai uses directory structures as a lock-free, crash-resistant job queue
+---
+
+## Overview
+
+Instead of using a traditional database or in-memory queue, nrvna-ai uses the **filesystem itself** as the job queue. Job directories move between subdirectories to represent state changes, leveraging POSIX atomic rename semantics for thread-safe, lock-free operation.
+
+<Info>
+The filesystem queue survives crashes, requires no database, and is trivially inspectable with standard Unix tools like `ls` and `tree`.
+</Info>
+
+## Design Principles
+
+### Directory = Job
+
+Each job is represented as a directory containing:
+
+```
+job_1736700000_12345_0/
+├── prompt.txt      ← input (always present)
+├── result.txt      ← output (on success)
+└── error.txt       ← error message (on failure)
+```
+
+<Tip>
+All job state is self-contained in the directory. You can move jobs between workspaces by simply copying directories.
+</Tip>
+
+### Location = State
+
+A job's **location** in the directory tree **is** the job's state:
+
+```
+WORKSPACE/
+├── input/
+│   ├── writing/         ← STAGING: being created
+│   └── ready/           ← QUEUED: waiting for worker
+├── processing/          ← RUNNING: inference in progress  
+├── output/              ← DONE: completed successfully
+└── failed/              ← FAILED: error occurred
+```
+
+No need for:
+- Database with state column
+- In-memory state tracking
+- Distributed consensus
+- Lock files or semaphores
+
+### Atomic Rename = State Transition
+
+POSIX guarantees that `rename()` is atomic - the directory is never in an intermediate state:
+
+```cpp
+std::filesystem::rename(
+    "workspace/input/ready/job_123",
+    "workspace/processing/job_123"
+);
+```
+
+**Atomicity guarantees:**
+- Either the rename succeeds completely
+- Or it fails completely and the job stays in original location
+- No partial state
+- No race conditions between threads
+- No locks needed
+
+<Warning>
+Atomic rename only works on the **same filesystem**. Don't use network filesystems (NFS, SMB) or span the workspace across mount points.
+</Warning>
+
+## Queue Operations
+
+### Enqueue (Job Submission)
+
+<Steps>
+  <Step title="Create in staging area">
+    ```cpp
+    auto staging = workspace / "input/writing" / job_id;
+    std::filesystem::create_directories(staging);
+    ```
+    
+    The `writing/` directory hides incomplete jobs from workers.
+  </Step>
+  
+  <Step title="Write job data">
+    ```cpp
+    writeFile(staging / "prompt.txt", prompt);
+    ```
+    
+    Job is still invisible to the Scanner.
+  </Step>
+  
+  <Step title="Atomically publish">
+    ```cpp
+    auto ready = workspace / "input/ready" / job_id;
+    std::filesystem::rename(staging, ready);
+    ```
+    
+    The atomic rename makes the job visible to Scanner in one operation. Workers will never see a half-written job.
+  </Step>
+</Steps>
+
+### Dequeue (Job Processing)
+
+<Steps>
+  <Step title="Scanner discovers job">
+    ```cpp
+    for (auto& entry : fs::directory_iterator(workspace / "input/ready")) {
+        auto job_id = entry.path().filename().string();
+        pool->submit(job_id);
+    }
+    ```
+    
+    Scanner finds jobs by listing `ready/` directory every 1 second.
+  </Step>
+  
+  <Step title="Worker claims job">
+    ```cpp
+    auto ready = workspace / "input/ready" / job_id;
+    auto processing = workspace / "processing" / job_id;
+    
+    try {
+        std::filesystem::rename(ready, processing);
+    } catch (const std::filesystem::filesystem_error&) {
+        // Another worker already claimed this job
+        return;
+    }
+    ```
+    
+    The atomic rename acts as a lock. Only one worker can successfully rename the directory.
+  </Step>
+  
+  <Step title="Process and finalize">
+    ```cpp
+    // Read prompt
+    auto prompt = readFile(processing / "prompt.txt");
+    
+    // Run inference
+    auto result = runner->run(prompt);
+    
+    // Write result and move to output
+    writeFile(processing / "result.txt", result);
+    std::filesystem::rename(
+        processing / job_id,
+        workspace / "output" / job_id
+    );
+    ```
+  </Step>
+</Steps>
+
+## Concurrency Safety
+
+### Lock-Free Dequeue
+
+Multiple workers can try to claim the same job simultaneously:
+
+```cpp
+Thread 1: rename(ready/job_X, processing/job_X)  ← succeeds
+Thread 2: rename(ready/job_X, processing/job_X)  ← fails (source doesn't exist)
+Thread 3: rename(ready/job_X, processing/job_X)  ← fails (source doesn't exist)
+```
+
+Only one thread succeeds. The others get a `filesystem_error` exception and move on to the next job.
+
+<Note>
+No mutexes, no spinlocks, no atomic variables needed. The filesystem provides the synchronization primitive.
+</Note>
+
+### Race Condition Prevention
+
+**Problem**: What if Scanner submits a job to Pool while a worker is already processing it?
+
+**Solution**: Workers attempt atomic rename from `ready/` to `processing/`. If job is already gone, rename fails harmlessly.
+
+```cpp
+void Processor::process(const JobId& job_id) {
+    auto ready = workspace_ / "input/ready" / job_id;
+    auto processing = workspace_ / "processing" / job_id;
+    
+    try {
+        // This is the critical section - only one thread succeeds
+        std::filesystem::rename(ready, processing);
+    } catch (const std::filesystem::filesystem_error& e) {
+        // Job already claimed by another worker, or doesn't exist
+        LOG_DEBUG("Job already claimed: " + job_id);
+        return;
+    }
+    
+    // We own the job now, proceed with processing...
+}
+```
+
+### Scanner-Worker Coordination
+
+No explicit coordination needed:
+
+```
+Time    Scanner Thread              Worker Thread
+----    --------------              -------------
+T0      scan ready/
+T1      found: job_A, job_B
+T2      submit job_A to pool
+T3      submit job_B to pool        rename job_A ready→processing ✓
+T4      scan ready/                 processing job_A...
+T5      found: (nothing)            
+T6                                  rename job_A processing→output ✓
+T7      scan ready/
+T8      submit job_B to pool        rename job_B ready→processing ✓
+```
+
+Notice:
+- Scanner may submit same job multiple times (T2 and T8 for job_B)
+- Only one worker successfully claims it (T8)
+- No locks, no coordination protocol needed
+
+## Crash Resistance
+
+### Jobs Survive Crashes
+
+Because jobs are stored on disk:
+
+```bash
+# Server crashes mid-processing
+$ ls workspace/processing/
+job_1736700000_12345_0/
+job_1736700001_12345_1/
+
+# Restart server
+$ nrvnad model.gguf workspace
+[INFO] Recovering orphaned jobs...
+[WARN] Recovered orphaned job: job_1736700000_12345_0
+[WARN] Recovered orphaned job: job_1736700001_12345_1
+[INFO] Server started
+
+# Orphaned jobs moved back to ready queue
+$ ls workspace/input/ready/
+job_1736700000_12345_0/
+job_1736700001_12345_1/
+```
+
+<Info>
+The server's `recoverOrphanedJobs()` function moves jobs from `processing/` back to `input/ready/` on startup.
+</Info>
+
+### No Data Loss
+
+Even in the worst case:
+- Jobs in `writing/` - Client can retry submission
+- Jobs in `ready/` - Will be processed normally
+- Jobs in `processing/` - Recovered and reprocessed
+- Jobs in `output/` - Results already available
+- Jobs in `failed/` - Errors already recorded
+
+### Checkpoint-Free Recovery
+
+<Warning>
+Recovered jobs are reprocessed **from scratch**. Partial inference progress is not saved. For long-running jobs, consider implementing streaming results.
+</Warning>
+
+## Queue Metrics
+
+### Queue Depth
+
+Easily measurable by counting directories:
+
+```bash
+# Jobs waiting
+$ ls workspace/input/ready/ | wc -l
+42
+
+# Jobs processing
+$ ls workspace/processing/ | wc -l
+4
+
+# Jobs completed
+$ ls workspace/output/ | wc -l
+1337
+```
+
+```cpp
+std::size_t queueDepth() const {
+    std::size_t count = 0;
+    for (auto& _ : fs::directory_iterator(workspace_ / "input/ready")) {
+        ++count;
+    }
+    return count;
+}
+```
+
+### Throughput
+
+Measure by monitoring output directory:
+
+```bash
+# Jobs completed in last hour
+$ find workspace/output/ -type d -mmin -60 | wc -l
+156
+
+# Average: 2.6 jobs/minute
+```
+
+## Comparison to Traditional Queues
+
+| Feature | nrvna (Filesystem) | Redis Queue | RabbitMQ | Database Queue |
+|---------|-------------------|-------------|----------|----------------|
+| **Setup** | Create directories | Redis server | Broker setup | Schema + migrations |
+| **Crash recovery** | Automatic | Persistence config | Durable queues | Transaction logs |
+| **Inspection** | `ls`, `cat` | Redis CLI | Management UI | SQL queries |
+| **Atomicity** | POSIX rename | Redis transactions | AMQP confirm | DB transactions |
+| **Distribution** | No | Yes | Yes | Yes |
+| **Performance** | Good (local FS) | Excellent | Good | Depends |
+| **Dependencies** | None | Redis | Broker | Database |
+
+<Note>
+Filesystem queues are perfect for **local, single-node** systems. For distributed systems, use traditional message queues.
+</Note>
+
+## Performance Characteristics
+
+### Scalability Limits
+
+**Directory entries**: Most filesystems handle thousands of entries efficiently:
+- ext4: ~10 million files per directory
+- APFS: billions of files
+- XFS: billions of files
+
+**Practical limits**:
+- 1-10K queued jobs: Excellent performance
+- 10K-100K queued jobs: Good performance
+- 100K+ queued jobs: Consider sharding or traditional queue
+
+### Scanner Performance
+
+Directory listing is O(n) where n = number of queued jobs:
+
+```cpp
+// Scanner runs every 1 second
+void Server::scanLoop() {
+    while (!shutdown_.load()) {
+        auto jobs = scanner_->scan();  // O(n) directory listing
+        for (const auto& job_id : jobs) {
+            pool_->submit(job_id);
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+```
+
+**Optimization**: For high-volume scenarios, consider:
+- Sharding by job ID prefix
+- Using filesystem notification APIs (inotify, FSEvents)
+- Reducing scan interval when queue is empty
+
+### Filesystem Recommendations
+
+<CardGroup cols={2}>
+  <Card title="Best: Local SSD" icon="bolt">
+    NVMe or SATA SSD on local machine. Fast atomic operations.
+  </Card>
+  <Card title="Good: Local HDD" icon="hard-drive">
+    Traditional spinning disk. Slower but still atomic.
+  </Card>
+  <Card title="Avoid: Network FS" icon="network-wired">
+    NFS, SMB, etc. May not guarantee atomic renames.
+  </Card>
+  <Card title="Avoid: Distributed FS" icon="cloud">
+    GlusterFS, CephFS. Atomic semantics vary.
+  </Card>
+</CardGroup>
+
+## Directory Structure Best Practices
+
+### Cleanup Strategy
+
+The queue grows indefinitely in `output/` and `failed/` directories:
+
+```bash
+# Manual cleanup of old jobs
+find workspace/output/ -type d -mtime +7 -exec rm -rf {} \;
+find workspace/failed/ -type d -mtime +7 -exec rm -rf {} \;
+```
+
+<Tip>
+Implement a cleanup cron job or background thread to prevent unbounded disk growth.
+</Tip>
+
+### Archival
+
+For long-term storage:
+
+```bash
+# Archive completed jobs
+tar -czf archive_$(date +%Y%m%d).tar.gz workspace/output/
+rm -rf workspace/output/*
+```
+
+### Monitoring Disk Usage
+
+```bash
+# Check workspace size
+du -sh workspace/
+
+# Breakdown by directory
+du -sh workspace/*/
+```
+
+## Implementation Details
+
+### Directory Creation
+
+```cpp
+bool Server::createWorkspace() noexcept {
+    namespace fs = std::filesystem;
+    
+    try {
+        fs::create_directories(workspace_ / "input/writing");
+        fs::create_directories(workspace_ / "input/ready");
+        fs::create_directories(workspace_ / "processing");
+        fs::create_directories(workspace_ / "output");
+        fs::create_directories(workspace_ / "failed");
+        return true;
+    } catch (const fs::filesystem_error& e) {
+        LOG_ERROR("Failed to create workspace: " + std::string(e.what()));
+        return false;
+    }
+}
+```
+
+### Job Directory Validation
+
+```cpp
+bool isValidJobDirectory(const fs::path& job_dir) {
+    // Must be a directory
+    if (!fs::is_directory(job_dir)) return false;
+    
+    // Must contain prompt.txt
+    if (!fs::exists(job_dir / "prompt.txt")) return false;
+    
+    // Prompt must be non-empty
+    auto size = fs::file_size(job_dir / "prompt.txt");
+    if (size == 0) return false;
+    
+    return true;
+}
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Job Lifecycle" icon="rotate" href="/concepts/job-lifecycle">
+    State machine and transitions
+  </Card>
+  <Card title="Threading Model" icon="layer-group" href="/concepts/threading-model">
+    Concurrency and worker threads
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Overall system design
+  </Card>
+  <Card title="Work API" icon="code" href="/api/work">
+    Job submission API
+  </Card>
+</CardGroup>

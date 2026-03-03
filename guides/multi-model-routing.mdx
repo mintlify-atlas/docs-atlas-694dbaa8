@@ -1,0 +1,136 @@
+---
+title: Multi-Model Routing
+description: Route tasks to specialized models based on type
+---
+
+Run multiple daemons with different models and route jobs based on the task at hand.
+
+## Basic Setup
+
+Start specialized daemons, each with its own workspace:
+
+```bash
+nrvnad qwen-vl.gguf    ./ws-vision &    # Vision model with mmproj auto-detected
+nrvnad codellama.gguf  ./ws-code   &    # Code-specialized model
+nrvnad phi-3-mini.gguf ./ws-fast   &    # Fast general-purpose model
+```
+
+Each daemon listens on its own workspace directory.
+
+## Routing Logic
+
+Route jobs based on file type or task characteristics:
+
+```bash
+classify() {
+  case "$1" in
+    *.jpg|*.png) echo "./ws-vision" ;;
+    *.py|*.js)   echo "./ws-code" ;;
+    *)           echo "./ws-fast" ;;
+  esac
+}
+
+# Submit to appropriate workspace
+ws=$(classify "$input")
+wrk "$ws" "Process this: $input"
+```
+
+## Common Routing Patterns
+
+<Steps>
+  <Step title="By file extension">
+    Route images to vision models, code to code models:
+    
+    ```bash
+    case "$file" in
+      *.jpg|*.png|*.gif) ws="./ws-vision" ;;
+      *.py|*.js|*.cpp)   ws="./ws-code" ;;
+      *)                 ws="./ws-default" ;;
+    esac
+    ```
+  </Step>
+  
+  <Step title="By task complexity">
+    Use fast models for simple tasks, larger models for complex ones:
+    
+    ```bash
+    if [ ${#prompt} -lt 100 ]; then
+      ws="./ws-fast"
+    else
+      ws="./ws-large"
+    fi
+    ```
+  </Step>
+  
+  <Step title="By latency requirements">
+    Route real-time requests to fast models:
+    
+    ```bash
+    if [ "$realtime" = "true" ]; then
+      ws="./ws-fast"
+    else
+      ws="./ws-quality"
+    fi
+    ```
+  </Step>
+</Steps>
+
+## Vision Model Routing
+
+Vision jobs are automatically serialized (mutex prevents parallel corruption):
+
+```bash
+# Submit multiple vision jobs
+for img in *.jpg; do
+  wrk ./ws-vision "Describe this image" --image "$img"
+done
+```
+
+Jobs queue up and process sequentially.
+
+## Load Balancing
+
+Round-robin across multiple instances:
+
+```bash
+# Start multiple workers for the same model
+nrvnad model.gguf ./ws-1 &
+nrvnad model.gguf ./ws-2 &
+nrvnad model.gguf ./ws-3 &
+
+# Round-robin
+count=0
+workspaces=(./ws-1 ./ws-2 ./ws-3)
+
+for task in "${tasks[@]}"; do
+  ws="${workspaces[$((count % 3))]}"
+  wrk "$ws" "$task"
+  ((count++))
+done
+```
+
+## Model Configuration
+
+Tune each daemon for its workload:
+
+```bash
+# Vision: large context, fewer workers (serialized anyway)
+NRVNA_MAX_CTX=16384 NRVNA_WORKERS=2 nrvnad qwen-vl.gguf ./ws-vision &
+
+# Code: moderate context, more workers
+NRVNA_MAX_CTX=8192 NRVNA_WORKERS=6 nrvnad codellama.gguf ./ws-code &
+
+# Fast: small context, max workers
+NRVNA_MAX_CTX=4096 NRVNA_WORKERS=8 nrvnad phi-3-mini.gguf ./ws-fast &
+```
+
+<Tip>
+Each workspace is independent. Monitor them separately with `ls ./ws-*/output | wc -l`.
+</Tip>
+
+## Tips
+
+- **Workspace isolation** — each daemon owns its workspace
+- **GPU sharing** — limit `NRVNA_GPU_LAYERS` per daemon to prevent OOM
+- **Model search path** — use `NRVNA_MODELS_DIR` to organize models
+- **Atomic routing** — workspace choice *is* the routing decision

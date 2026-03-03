@@ -1,0 +1,593 @@
+---
+title: Threading Model
+description: Understanding concurrency, thread safety, and parallelism in nrvna-ai
+---
+
+## Overview
+
+nrvna-ai uses a multi-threaded architecture to process multiple LLM inference jobs concurrently. The design separates job discovery, queue management, and execution into distinct threads with minimal synchronization overhead.
+
+<Info>
+The threading model leverages **atomic filesystem operations** instead of mutexes wherever possible, reducing lock contention and complexity.
+</Info>
+
+## Thread Architecture
+
+```
+Main Thread
+    │
+    ├── creates Server
+    │       │
+    │       ├── creates Scanner (1 thread)
+    │       ├── creates Pool (N worker threads)
+    │       └── creates Processor (shared, thread-safe)
+    │
+    └── waits for shutdown signal (SIGINT, SIGTERM)
+
+Scanner Thread
+    └── loops every 1 second
+        └── scans input/ready/
+        └── submits jobs to Pool queue
+
+Worker Threads (N = NRVNA_WORKERS, default 4)
+    ├── Worker-0
+    ├── Worker-1  
+    ├── Worker-2
+    └── Worker-N
+        └── wait on condition variable
+        └── pop job from queue
+        └── call Processor::process(job_id, worker_id)
+        └── each has dedicated Runner instance
+```
+
+<Tabs>
+  <Tab title="Main Thread">
+    **Responsibilities:**
+    - Initialize Server and components
+    - Create workspace directory structure
+    - Recover orphaned jobs from previous crashes
+    - Start Scanner thread and Worker threads
+    - Wait for shutdown signal
+    - Coordinate graceful shutdown
+    
+    **Thread name**: `Main`
+    
+    ```cpp
+    int main(int argc, char* argv[]) {
+        Server server(model_path, workspace, num_workers);
+        
+        if (!server.start()) {
+            return 1;
+        }
+        
+        // Wait for SIGINT or SIGTERM
+        signal(SIGINT, signalHandler);
+        signal(SIGTERM, signalHandler);
+        
+        while (!shutdown_requested) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        
+        server.shutdown();
+        return 0;
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Scanner Thread">
+    **Responsibilities:**
+    - Periodically scan `input/ready/` directory (every 1 second)
+    - Discover new jobs waiting in queue
+    - Submit job IDs to Pool's work queue
+    - Single-threaded, runs continuously until shutdown
+    
+    **Thread name**: `Scanner`
+    
+    ```cpp
+    void Server::scanLoop() {
+        setThreadName("Scanner");
+        
+        while (!shutdown_.load()) {
+            auto jobs = scanner_->scan();
+            
+            for (const auto& job_id : jobs) {
+                pool_->submit(job_id);
+                LOG_DEBUG("Submitted job to pool: " + job_id);
+            }
+            
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+    ```
+    
+    <Note>
+    Scanner may submit the same job multiple times if it's still in `ready/` during the next scan. Workers handle this by attempting atomic rename - only one succeeds.
+    </Note>
+  </Tab>
+  
+  <Tab title="Worker Threads">
+    **Responsibilities:**
+    - Wait on condition variable for jobs in queue
+    - Pop job ID from thread-safe queue
+    - Call Processor to execute job
+    - Each worker has dedicated llama.cpp Runner instance
+    - Process jobs until shutdown signal
+    
+    **Thread names**: `Worker-0`, `Worker-1`, ..., `Worker-N`
+    
+    ```cpp
+    void Pool::workerLoop(int worker_id) {
+        setThreadName("Worker-" + std::to_string(worker_id));
+        
+        while (!shutdown_.load()) {
+            std::unique_lock<std::mutex> lock(queueMutex_);
+            
+            // Wait for job or shutdown
+            condition_.wait(lock, [this] {
+                return !jobs_.empty() || shutdown_.load();
+            });
+            
+            if (shutdown_.load()) break;
+            
+            auto job_id = jobs_.front();
+            jobs_.pop();
+            lock.unlock();
+            
+            // Process job (outside the lock)
+            processor_(job_id, worker_id);
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Thread Count Configuration
+
+<CodeGroup>
+```bash Environment Variable
+export NRVNA_WORKERS=8
+nrvnad model.gguf workspace
+```
+
+```cpp Server Constructor
+Server server(model_path, workspace, 8);  // 8 worker threads
+```
+
+```bash Default (4 workers)
+nrvnad model.gguf workspace
+```
+</CodeGroup>
+
+**Choosing thread count:**
+
+<CardGroup cols={2}>
+  <Card title="CPU-bound models" icon="microchip">
+    Set workers = CPU cores (e.g., 4-8 for typical machines)
+  </Card>
+  <Card title="GPU-accelerated models" icon="sparkles">
+    More workers can help (8-16) as inference happens on GPU
+  </Card>
+  <Card title="Memory constraints" icon="memory">
+    Each worker needs context memory. Reduce if OOM errors occur.
+  </Card>
+  <Card title="I/O-bound tasks" icon="hard-drive">
+    More workers help with filesystem I/O parallelism
+  </Card>
+</CardGroup>
+
+## Synchronization Mechanisms
+
+### Atomic Filesystem Operations
+
+Most synchronization uses **atomic directory renames** instead of mutexes:
+
+```cpp
+// NO MUTEX NEEDED - atomic rename guarantees only one thread succeeds
+void Processor::process(const JobId& job_id) {
+    auto ready = workspace_ / "input/ready" / job_id;
+    auto processing = workspace_ / "processing" / job_id;
+    
+    try {
+        std::filesystem::rename(ready, processing);  // ⚛️ ATOMIC
+    } catch (const std::filesystem::filesystem_error&) {
+        return;  // Another worker already claimed this job
+    }
+    
+    // We now own this job exclusively...
+}
+```
+
+**Benefits:**
+- Lock-free job claiming
+- No contention between workers
+- Simple, debuggable code
+- Crash-safe (no locks to deadlock)
+
+### Pool Queue Mutex
+
+The only mutex in the system protects the **job queue** in Pool:
+
+```cpp
+class Pool {
+private:
+    std::queue<JobId> jobs_;           // Job queue
+    std::mutex queueMutex_;            // Protects jobs_
+    std::condition_variable condition_; // Notifies workers
+};
+```
+
+**Operations:**
+
+<CodeGroup>
+```cpp Submit Job (Scanner → Pool)
+void Pool::submit(const JobId& job_id) {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    jobs_.push(job_id);
+    condition_.notify_one();  // Wake up one worker
+}
+```
+
+```cpp Pop Job (Pool → Worker)
+JobId Pool::pop() {
+    std::unique_lock<std::mutex> lock(queueMutex_);
+    
+    // Wait for job or shutdown
+    condition_.wait(lock, [this] {
+        return !jobs_.empty() || shutdown_.load();
+    });
+    
+    if (shutdown_.load()) return "";
+    
+    auto job_id = jobs_.front();
+    jobs_.pop();
+    return job_id;
+}
+```
+</CodeGroup>
+
+<Warning>
+The mutex is held **only during queue manipulation**. Actual job processing happens outside the lock, so workers don't block each other.
+</Warning>
+
+### Atomic Flags
+
+Simple boolean flags use `std::atomic` for lock-free reads/writes:
+
+```cpp
+class Server {
+private:
+    std::atomic<bool> running_{false};   // Server state
+    std::atomic<bool> shutdown_{false};  // Shutdown signal
+};
+
+// Check running state (no lock needed)
+bool Server::isRunning() const noexcept {
+    return running_.load();
+}
+
+// Signal shutdown (no lock needed)
+void Server::shutdown() noexcept {
+    shutdown_.store(true);
+}
+```
+
+## Memory Model
+
+### Shared Model, Per-Thread Context
+
+```cpp
+class Processor {
+private:
+    std::shared_ptr<Runner> runner_;  // Shared across workers
+};
+
+class Runner {
+private:
+    llama_model* model_;              // ✅ Shared (read-only)
+    std::vector<llama_context*> contexts_;  // ✅ Per-worker contexts
+};
+```
+
+**Why this design:**
+
+<Steps>
+  <Step title="Model is expensive to load">
+    Loading a 7B model takes ~4GB RAM and several seconds. Load once, share across all workers.
+  </Step>
+  
+  <Step title="Context is mutable">
+    llama.cpp's `llama_context` maintains inference state (KV cache, RNG). Each worker needs its own.
+  </Step>
+  
+  <Step title="Parallel inference">
+    Multiple workers can run inference simultaneously, each with their own context but sharing the model weights.
+  </Step>
+</Steps>
+
+### Runner Initialization
+
+```cpp
+Runner::Runner(const std::string& model_path, int num_workers) {
+    // Load model once (expensive)
+    model_ = llama_load_model_from_file(model_path.c_str(), params_);
+    
+    // Create per-worker contexts
+    for (int i = 0; i < num_workers; ++i) {
+        auto* ctx = llama_new_context_with_model(model_, ctx_params_);
+        contexts_.push_back(ctx);
+    }
+}
+
+std::string Runner::run(const std::string& prompt, int worker_id) {
+    auto* ctx = contexts_[worker_id];  // Each worker uses its own context
+    // ... inference using ctx ...
+}
+```
+
+<Info>
+**Memory usage**: (Model size) + (Context size × num_workers)
+
+Example: 7B Q4_0 model (~4GB) + 4 workers × 2GB context = ~12GB total
+</Info>
+
+## Thread Safety Analysis
+
+### Thread-Safe Components
+
+<AccordionGroup>
+  <Accordion title="Logger - Fully Thread-Safe" icon="shield-check">
+    ```cpp
+    class Logger {
+    private:
+        static std::mutex logMutex_;  // Protects all logging
+    public:
+        static void log(Level level, const std::string& message) {
+            std::lock_guard<std::mutex> lock(logMutex_);
+            // ... write to stdout/stderr ...
+        }
+    };
+    ```
+    
+    All logging macros are safe to call from any thread:
+    ```cpp
+    LOG_INFO("Worker-" + std::to_string(worker_id) + " processing job");
+    ```
+  </Accordion>
+  
+  <Accordion title="Processor - Thread-Safe by Design" icon="shield-check">
+    ```cpp
+    class Processor {
+    public:
+        // Safe to call from multiple workers concurrently
+        void process(const JobId& job_id, int worker_id);
+    };
+    ```
+    
+    **Why it's safe:**
+    - Uses atomic filesystem renames for job claiming
+    - Each worker processes different job (exclusive ownership)
+    - Shared Runner uses worker_id to select dedicated context
+    - No shared mutable state
+  </Accordion>
+  
+  <Accordion title="Scanner - Single-Threaded" icon="user">
+    Scanner runs in dedicated thread, no concurrent access:
+    ```cpp
+    std::vector<JobId> Scanner::scan() {
+        // Only called by Scanner thread
+        // No synchronization needed
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Pool - Mutex-Protected Queue" icon="lock">
+    ```cpp
+    class Pool {
+    private:
+        std::queue<JobId> jobs_;      // Protected by queueMutex_
+        std::mutex queueMutex_;
+        std::condition_variable condition_;
+    };
+    ```
+    
+    All queue operations are protected.
+  </Accordion>
+</AccordionGroup>
+
+### NOT Thread-Safe (By Design)
+
+<Warning>
+These components are designed for single-threaded use:
+
+- **Work**: Client creates instance per thread
+- **Flow**: Client creates instance per thread
+- **Server**: Single instance, start() called once from main thread
+</Warning>
+
+```cpp
+// ❌ WRONG - sharing Work across threads
+Work work(workspace);
+std::thread t1([&work] { work.submit("prompt 1"); });
+std::thread t2([&work] { work.submit("prompt 2"); });
+
+// ✅ CORRECT - each thread gets own Work instance
+std::thread t1([] { Work work(workspace); work.submit("prompt 1"); });
+std::thread t2([] { Work work(workspace); work.submit("prompt 2"); });
+```
+
+## Graceful Shutdown
+
+Shutdown sequence:
+
+<Steps>
+  <Step title="Main thread receives signal">
+    ```cpp
+    void signalHandler(int sig) {
+        shutdown_requested = true;
+    }
+    ```
+  </Step>
+  
+  <Step title="Server::shutdown() called">
+    ```cpp
+    void Server::shutdown() noexcept {
+        LOG_INFO("Shutting down server...");
+        shutdown_.store(true);  // Signal all threads
+        condition_.notify_all(); // Wake up all workers
+    }
+    ```
+  </Step>
+  
+  <Step title="Scanner thread exits">
+    ```cpp
+    while (!shutdown_.load()) {  // Loop exits
+        // ...
+    }
+    LOG_INFO("Scanner thread exiting");
+    ```
+  </Step>
+  
+  <Step title="Worker threads finish current jobs">
+    ```cpp
+    void Pool::workerLoop(int worker_id) {
+        while (!shutdown_.load()) {
+            // ... process job ...
+        }
+        LOG_INFO("Worker-" + std::to_string(worker_id) + " exiting");
+    }
+    ```
+  </Step>
+  
+  <Step title="Server destructor joins threads">
+    ```cpp
+    Server::~Server() {
+        if (scannerThread_.joinable()) {
+            scannerThread_.join();
+        }
+        // Pool destructor joins worker threads
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+**In-progress jobs are interrupted**. Jobs in `processing/` will be moved back to `ready/` on next server start.
+</Warning>
+
+## Performance Considerations
+
+### Lock Contention
+
+<CardGroup cols={2}>
+  <Card title="Low Contention" icon="check">
+    Pool queue mutex held briefly (queue operations only)
+  </Card>
+  <Card title="No Contention" icon="check">
+    Job processing uses lock-free atomic renames
+  </Card>
+  <Card title="Minimal Locking" icon="check">
+    Logger mutex only during log writes
+  </Card>
+  <Card title="Cache-Friendly" icon="check">
+    Workers operate on independent job directories
+  </Card>
+</CardGroup>
+
+### Context Switches
+
+Workers sleep efficiently using condition variables:
+
+```cpp
+condition_.wait(lock, [this] {
+    return !jobs_.empty() || shutdown_.load();
+});
+```
+
+- No busy-waiting
+- No CPU spinning
+- Workers wake only when jobs available
+
+### Memory Locality
+
+Each worker:
+- Has dedicated llama.cpp context (separate memory)
+- Processes different job directories (separate filesystem cache)
+- Minimal shared state (just the job queue)
+
+## Debugging Threading Issues
+
+### Thread Names
+
+Set via platform-specific APIs:
+
+```cpp
+void setThreadName(const std::string& name) {
+#if defined(__linux__)
+    pthread_setname_np(pthread_self(), name.c_str());
+#elif defined(__APPLE__)
+    pthread_setname_np(name.c_str());
+#endif
+}
+```
+
+Visible in logs:
+```
+[2026-01-12 10:30:45.123] [INFO ] [Scanner] Found 3 ready jobs
+[2026-01-12 10:30:45.125] [INFO ] [Worker-0] Processing job: job_123
+[2026-01-12 10:30:45.126] [INFO ] [Worker-1] Processing job: job_124
+```
+
+### Debugging Tools
+
+<CodeGroup>
+```bash Thread Count
+# List threads
+pgrep nrvnad | xargs ps -T -p
+
+# Expect: 1 main + 1 scanner + N workers
+```
+
+```bash Thread Names (Linux)
+# View thread names
+ps -T -p $(pgrep nrvnad) -o comm,pid,tid
+```
+
+```bash Active Jobs
+# See which worker is processing which job
+ls -l workspace/processing/
+```
+</CodeGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Match CPU Cores" icon="microchip">
+    Set `NRVNA_WORKERS` to match your CPU core count for CPU-bound inference.
+  </Card>
+  <Card title="Monitor Memory" icon="chart-line">
+    Watch memory usage: (model size) + (context × workers). Reduce workers if OOM.
+  </Card>
+  <Card title="Don't Share Client APIs" icon="ban">
+    Create separate Work/Flow instances per thread. They're not thread-safe.
+  </Card>
+  <Card title="Let Jobs Complete" icon="hourglass">
+    Avoid SIGKILL. Use SIGINT/SIGTERM for graceful shutdown.
+  </Card>
+</CardGroup>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Overall system design
+  </Card>
+  <Card title="Filesystem Queue" icon="folder-tree" href="/concepts/filesystem-queue">
+    Lock-free queue implementation
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/environment">
+    Environment variables including NRVNA_WORKERS
+  </Card>
+  <Card title="Server API" icon="code" href="/api/server">
+    Server class reference
+  </Card>
+</CardGroup>

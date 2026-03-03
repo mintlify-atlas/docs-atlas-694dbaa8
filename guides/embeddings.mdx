@@ -1,0 +1,163 @@
+---
+title: Embeddings
+description: Generate embeddings with nrvna-ai
+---
+
+Generate vector embeddings for semantic search, clustering, and similarity tasks.
+
+## Job Types
+
+From `work.hpp:15-19`, nrvna-ai supports three job types:
+
+```cpp
+enum class JobType : uint8_t {
+    Text = 0,
+    Embed = 1,
+    Vision = 2
+};
+```
+
+Use `JobType::Embed` to generate embeddings instead of text completions.
+
+## Basic Usage
+
+Submit an embedding job:
+
+```bash
+wrk ./workspace "Search query text" --type embed
+```
+
+The result is a vector (array of floats) instead of generated text.
+
+## API Reference
+
+From `work.hpp:46`:
+
+```cpp
+SubmitResult submit(const std::string& prompt, JobType type = JobType::Text);
+```
+
+Specify `JobType::Embed` to generate embeddings.
+
+## Batch Embeddings
+
+Generate embeddings for multiple texts:
+
+```bash
+# Embed a corpus
+while IFS= read -r line; do
+  wrk ./workspace "$line" --type embed >> jobs.txt
+done < corpus.txt
+
+# Collect vectors
+for job in $(cat jobs.txt); do
+  flw ./workspace $job >> embeddings.json
+done
+```
+
+## Use Cases
+
+<Steps>
+  <Step title="Semantic search">
+    Embed documents and queries, then compute cosine similarity:
+    
+    ```bash
+    # Embed documents
+    for doc in docs/*.txt; do
+      wrk ./workspace "$(cat $doc)" --type embed >> doc-embeddings.txt
+    done
+    
+    # Embed query
+    query_emb=$(wrk ./workspace "search query" --type embed | xargs flw ./workspace)
+    
+    # Compare with similarity function
+    # (compute cosine similarity in your app)
+    ```
+  </Step>
+  
+  <Step title="Clustering">
+    Group similar texts by embedding distance:
+    
+    ```bash
+    # Embed all items
+    for item in items/*.txt; do
+      wrk ./workspace "$(cat $item)" --type embed
+    done
+    
+    # Cluster vectors with k-means or DBSCAN
+    # (use Python/NumPy for clustering)
+    ```
+  </Step>
+  
+  <Step title="Duplicate detection">
+    Find near-duplicate content:
+    
+    ```bash
+    # Embed all candidates
+    for candidate in candidates/*.txt; do
+      id=$(basename "$candidate" .txt)
+      emb=$(wrk ./workspace "$(cat $candidate)" --type embed | xargs flw ./workspace)
+      echo "$id|$emb" >> embeddings.txt
+    done
+    
+    # Find pairs with high similarity
+    # (threshold cosine similarity > 0.95)
+    ```
+  </Step>
+</Steps>
+
+## Model Selection
+
+Use embedding-specialized models for best results:
+
+```bash
+# Dedicated embedding workspace
+nrvnad nomic-embed-text.gguf ./ws-embed &
+
+# Submit to embedding workspace
+wrk ./ws-embed "text to embed" --type embed
+```
+
+Embedding models are typically smaller and faster than generative models.
+
+## Configuration
+
+Embedding jobs don't generate tokens, so adjust settings:
+
+```bash
+# No need for large predict size
+export NRVNA_PREDICT=1
+
+# Context size = max input length
+export NRVNA_MAX_CTX=2048
+
+# Max workers for throughput
+export NRVNA_WORKERS=8
+
+nrvnad embed-model.gguf ./workspace
+```
+
+## Output Format
+
+Embedding results are vectors (arrays of floats). Parse them in your application:
+
+```python
+import json
+import subprocess
+
+# Submit and wait
+job_id = subprocess.check_output(['wrk', './workspace', 'text', '--type', 'embed']).strip()
+result = subprocess.check_output(['flw', './workspace', job_id])
+
+# Parse vector
+vector = json.loads(result)
+print(f"Embedding dimension: {len(vector)}")
+```
+
+## Tips
+
+- **Embedding vs. Text** — use `--type embed` for vectors, default for completions
+- **Model choice** — embedding models outperform generative models on similarity tasks
+- **Normalization** — some models return normalized vectors, others don't
+- **Dimensions** — typical sizes are 384, 768, 1024, or 1536
+- **Batch processing** — embeddings are fast; process thousands per minute

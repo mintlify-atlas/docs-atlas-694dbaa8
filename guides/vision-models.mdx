@@ -1,0 +1,148 @@
+---
+title: Vision Models
+description: Working with multimodal models in nrvna-ai
+---
+
+Use vision models to analyze images alongside text prompts.
+
+## Setup
+
+Vision models require a model file and a multimodal projector (mmproj):
+
+<Steps>
+  <Step title="Place model and projector">
+    Put both files in your models directory:
+    
+    ```bash
+    models/
+    ├── qwen-vl.gguf
+    └── qwen-vl-mmproj.gguf
+    ```
+    
+    The mmproj file must have the same base name with `-mmproj` suffix.
+  </Step>
+  
+  <Step title="Start the daemon">
+    Launch with the vision model:
+    
+    ```bash
+    nrvnad qwen-vl.gguf ./workspace
+    ```
+    
+    The daemon auto-detects the mmproj file.
+  </Step>
+</Steps>
+
+## Basic Usage
+
+Submit jobs with images using the `--image` flag:
+
+```bash
+wrk ./workspace "What's in this image?" --image photo.jpg
+```
+
+### CLI Reference
+
+From `work.hpp:47`, the `submit` method accepts image paths:
+
+```cpp
+SubmitResult submit(const std::string& prompt, 
+                   const std::vector<std::filesystem::path>& imagePaths);
+```
+
+Jobs with images are automatically marked as `JobType::Vision`.
+
+## Batch Vision Processing
+
+Process multiple images:
+
+```bash
+# Submit 100 image jobs
+for img in photos/*.jpg; do
+  wrk ./workspace "Caption this image" --image "$img" >> jobs.txt
+done
+
+# Check progress
+ls ./workspace/output/ | wc -l
+
+# Collect all results
+for job in $(cat jobs.txt); do
+  echo "=== $job ==="
+  flw ./workspace $job
+done
+```
+
+<Warning>
+Vision processing is serialized with a mutex to prevent corruption. Jobs queue up and run sequentially, even with multiple workers.
+</Warning>
+
+## Multi-Image Jobs
+
+Pass multiple images to a single job:
+
+```bash
+wrk ./workspace "Compare these images" \
+  --image photo1.jpg \
+  --image photo2.jpg \
+  --image photo3.jpg
+```
+
+The model receives all images in context.
+
+## Vision + Text Workflows
+
+Combine vision analysis with text processing:
+
+```bash
+# Analyze image
+caption=$(wrk ./ws-vision "Describe this image" --image photo.jpg | xargs flw ./ws-vision)
+
+# Use result in text task
+wrk ./ws-text "Write a story about: $caption"
+```
+
+Route to different workspaces for specialized models:
+
+```bash
+nrvnad qwen-vl.gguf  ./ws-vision &
+nrvnad llama-3.gguf  ./ws-text   &
+```
+
+## Job Types
+
+From `work.hpp:15-19`:
+
+```cpp
+enum class JobType : uint8_t {
+    Text = 0,
+    Embed = 1,
+    Vision = 2
+};
+```
+
+Vision jobs are automatically assigned `JobType::Vision` when images are provided.
+
+## Configuration
+
+Tune vision model performance:
+
+```bash
+# Large context for detailed analysis
+export NRVNA_MAX_CTX=16384
+
+# Fewer workers (vision is serialized)
+export NRVNA_WORKERS=2
+
+# GPU acceleration
+export NRVNA_GPU_LAYERS=99
+
+nrvnad qwen-vl.gguf ./workspace
+```
+
+## Tips
+
+- **mmproj auto-detection** — name it `<model>-mmproj.gguf`
+- **Serialized execution** — vision jobs run one at a time
+- **Image formats** — supports JPEG, PNG, and other common formats
+- **Context overhead** — images consume significant context tokens
+- **Workspace routing** — dedicate a workspace to vision tasks

@@ -1,0 +1,154 @@
+---
+title: "wrk"
+description: "Submit inference jobs to a workspace"
+---
+
+`wrk` submits text, image, or embedding jobs to a workspace for processing by `nrvnad`.
+
+## Usage
+
+```bash
+wrk <workspace> <prompt...>
+wrk <workspace> <prompt> --image <path>
+wrk <workspace> <text> --embed
+wrk <workspace> -
+wrk [--help | --version]
+```
+
+## Arguments
+
+<ParamField path="workspace" type="string" required>
+  Directory path for job storage. Must match the workspace used by `nrvnad`.
+</ParamField>
+
+<ParamField path="prompt" type="string" required>
+  Text prompt for inference. Can be multiple words without quotes.
+</ParamField>
+
+<ParamField path="-" type="string">
+  Read prompt from stdin instead of command-line arguments.
+</ParamField>
+
+## Options
+
+<ParamField path="--image, -i" type="string">
+  Path to image file to attach. Can be specified multiple times for multiple images.
+</ParamField>
+
+<ParamField path="--embed" type="boolean">
+  Submit as embedding job instead of text generation. Returns a vector representation.
+</ParamField>
+
+<ParamField path="-h, --help" type="boolean">
+  Display help message.
+</ParamField>
+
+<ParamField path="-v, --version" type="boolean">
+  Display version number.
+</ParamField>
+
+## Environment Variables
+
+<ParamField path="NRVNA_LOG_LEVEL" type="string">
+  Log level: ERROR, WARN, INFO, DEBUG, TRACE (default: WARN for clean output).
+</ParamField>
+
+## Output
+
+On success, `wrk` outputs only the job ID to stdout:
+
+```
+abc123def456
+```
+
+This makes it ideal for piping to `flw`:
+
+```bash
+wrk ./workspace "Hello" | flw ./workspace -w
+```
+
+## Examples
+
+### Submit simple text prompt
+
+```bash
+wrk ./workspace What is the capital of France?
+```
+
+Note: Quotes are optional for multi-word prompts.
+
+### Submit with quotes
+
+```bash
+wrk ./workspace "What is the capital of France?"
+```
+
+### Submit from stdin
+
+```bash
+echo "Hello world" | wrk ./workspace -
+```
+
+### Submit with image
+
+```bash
+wrk ./workspace "Describe this image" --image photo.jpg
+```
+
+### Submit multiple images
+
+```bash
+wrk ./workspace "Compare these images" -i img1.jpg -i img2.jpg
+```
+
+### Submit embedding request
+
+```bash
+wrk ./workspace "Machine learning is a subset of AI" --embed
+```
+
+### Pipe to result retrieval
+
+```bash
+jobid=$(wrk ./workspace "Hello")
+flw ./workspace $jobid
+```
+
+Or in one line:
+
+```bash
+wrk ./workspace "Hello" | flw ./workspace -w
+```
+
+## Behavior
+
+### Prompt Handling
+
+- All non-option arguments after workspace are joined with spaces
+- Stdin input strips only trailing newline for single-line prompts
+- Empty prompts are rejected with an error
+
+### Workspace Creation
+
+If the workspace directory doesn't exist, `wrk` creates it with the required structure.
+
+### Job Types
+
+1. **Text Generation** (default): Standard LLM completion
+2. **Vision**: Text generation with image context (when `--image` is used)
+3. **Embedding**: Vector representation (when `--embed` is used)
+
+## Exit Codes
+
+- `0` - Success, job submitted
+- `1` - Error occurred
+
+## Error Messages
+
+Errors are written to stderr:
+
+```bash
+Error: Empty prompt provided
+Error: --image requires a path
+Error: Unknown error submitting job
+```

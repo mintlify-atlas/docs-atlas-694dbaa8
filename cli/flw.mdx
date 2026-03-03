@@ -1,0 +1,159 @@
+---
+title: "flw"
+description: "Retrieve inference results from a workspace"
+---
+
+`flw` retrieves completed job results from a workspace processed by `nrvnad`.
+
+## Usage
+
+```bash
+flw <workspace> [job_id]
+flw <workspace> -w [job_id]
+flw [--help | --version]
+```
+
+## Arguments
+
+<ParamField path="workspace" type="string" required>
+  Directory path for job storage. Must match the workspace used by `nrvnad`.
+</ParamField>
+
+<ParamField path="job_id" type="string">
+  Specific job ID to retrieve. If omitted, retrieves the latest completed job. Can be read from stdin for piping.
+</ParamField>
+
+## Options
+
+<ParamField path="-w, --wait" type="boolean">
+  Wait for job to complete before returning. Polls every 100ms until status is DONE or FAILED.
+</ParamField>
+
+<ParamField path="-h, --help" type="boolean">
+  Display help message.
+</ParamField>
+
+<ParamField path="-v, --version" type="boolean">
+  Display version number.
+</ParamField>
+
+## Environment Variables
+
+<ParamField path="NRVNA_LOG_LEVEL" type="string">
+  Log level: ERROR, WARN, INFO, DEBUG, TRACE (default: WARN for clean output).
+</ParamField>
+
+## Output
+
+On success, `flw` outputs the job result to stdout:
+
+```
+The capital of France is Paris.
+```
+
+Error messages go to stderr, making it safe for piping.
+
+## Examples
+
+### Retrieve latest job
+
+```bash
+flw ./workspace
+```
+
+### Retrieve specific job
+
+```bash
+flw ./workspace abc123def456
+```
+
+### Wait for job completion
+
+```bash
+flw ./workspace -w abc123def456
+```
+
+### Pipe from wrk
+
+```bash
+wrk ./workspace "Hello" | flw ./workspace -w
+```
+
+This pattern submits a job and waits for the result in one command.
+
+### Store result in variable
+
+```bash
+result=$(flw ./workspace abc123)
+echo "Result: $result"
+```
+
+### Chain with job submission
+
+```bash
+jobid=$(wrk ./workspace "What is 2+2?")
+flw ./workspace -w $jobid
+```
+
+## Behavior
+
+### Job Resolution
+
+1. If `job_id` is provided as argument, retrieves that specific job
+2. If `job_id` is omitted, retrieves the latest job from `output/` or `failed/` directories
+3. If stdin is not a TTY, reads `job_id` from stdin (for piping)
+
+### Status Handling
+
+- **DONE**: Outputs job content to stdout, exit code 0
+- **FAILED**: Outputs error to stderr, exit code 1
+- **QUEUED/RUNNING**: Outputs status message to stderr, exit code 2
+- **MISSING**: Outputs "Job not found" to stderr, exit code 1
+
+### Wait Mode
+
+When `--wait` is used:
+- Polls job status every 100ms
+- Blocks until status is DONE or FAILED
+- Then returns the result or error
+
+## Exit Codes
+
+- `0` - Success, job completed
+- `1` - Error or job failed
+- `2` - Job not ready (still queued or running)
+
+## Job Status Values
+
+- `QUEUED` - Job is waiting to be processed
+- `RUNNING` - Job is currently being processed
+- `DONE` - Job completed successfully
+- `FAILED` - Job failed during processing
+- `MISSING` - Job ID not found in workspace
+
+## Error Messages
+
+Errors are written to stderr:
+
+```bash
+No jobs found
+Job not found: abc123
+Job failed: abc123
+Job not ready: abc123 (status: RUNNING)
+```
+
+## Integration Pattern
+
+The recommended workflow combines `wrk` and `flw`:
+
+```bash
+# Submit and wait for result
+wrk ./workspace "prompt" | flw ./workspace -w
+
+# Or with error handling
+if result=$(wrk ./workspace "prompt" | flw ./workspace -w); then
+    echo "Success: $result"
+else
+    echo "Failed"
+fi
+```

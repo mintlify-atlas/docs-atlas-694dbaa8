@@ -1,0 +1,160 @@
+---
+title: 'C++ Library Overview'
+description: 'Overview of the nrvna-ai C++ library for asynchronous inference'
+---
+
+## Introduction
+
+The nrvna-ai C++ library provides a simple, filesystem-based asynchronous inference primitive. It enables applications to submit AI inference jobs and retrieve results through a workspace directory, decoupling job submission from processing.
+
+## Core Components
+
+The library consists of four main classes:
+
+### [Work](/api/work)
+
+The `Work` class handles job submission. It creates job requests in the workspace directory with prompts, images, and metadata.
+
+```cpp
+#include <nrvna/work.hpp>
+
+using namespace nrvnaai;
+
+Work work("/tmp/nrvna-workspace");
+auto result = work.submit("Explain quantum computing");
+if (result) {
+    std::cout << "Job ID: " << result.id << std::endl;
+}
+```
+
+### [Flow](/api/flow)
+
+The `Flow` class retrieves job results and monitors status. It reads completed jobs from the workspace.
+
+```cpp
+#include <nrvna/flow.hpp>
+
+using namespace nrvnaai;
+
+Flow flow("/tmp/nrvna-workspace");
+auto job = flow.latest();
+if (job && job->status == Status::Done) {
+    std::cout << job->content << std::endl;
+}
+```
+
+### [Server](/api/server)
+
+The `Server` class processes submitted jobs using AI models. It runs worker threads that scan the workspace and execute inference.
+
+```cpp
+#include <nrvna/server.hpp>
+
+using namespace nrvnaai;
+
+Server server("model.gguf", "/tmp/nrvna-workspace", 4);
+if (server.start()) {
+    // Server is running
+}
+```
+
+### [Types](/api/types)
+
+Core type definitions including `Status`, `JobId`, `JobType`, and result structures.
+
+## Namespace
+
+All classes and types are defined in the `nrvnaai` namespace:
+
+```cpp
+namespace nrvnaai {
+    // All library components
+}
+```
+
+## Workspace Structure
+
+The library uses a filesystem workspace to coordinate between job submitters and processors:
+
+- Jobs are submitted as directories in the workspace
+- Each job directory contains `prompt.txt`, `type`, and optional image files
+- Results are written to `result.txt` or `error.txt`
+- Status is tracked through directory states (queued, running, done, failed)
+
+## Thread Safety
+
+The `Work` and `Flow` classes are move-only and not thread-safe. Create separate instances per thread if needed. The `Server` class manages its own internal threading.
+
+## Error Handling
+
+The library uses result types and optional values for error handling:
+
+- `SubmitResult` for job submission operations
+- `std::optional<Job>` for retrieval operations
+- Status enums for job state tracking
+
+## Example Workflow
+
+```cpp
+#include <nrvna/work.hpp>
+#include <nrvna/flow.hpp>
+#include <nrvna/server.hpp>
+#include <iostream>
+#include <thread>
+#include <chrono>
+
+using namespace nrvnaai;
+
+int main() {
+    const std::string workspace = "/tmp/nrvna-workspace";
+    
+    // Start server
+    Server server("model.gguf", workspace, 4);
+    if (!server.start()) {
+        std::cerr << "Failed to start server" << std::endl;
+        return 1;
+    }
+    
+    // Submit job
+    Work work(workspace);
+    auto result = work.submit("What is the meaning of life?");
+    if (!result) {
+        std::cerr << "Submission failed: " << result.message << std::endl;
+        return 1;
+    }
+    
+    // Poll for result
+    Flow flow(workspace);
+    while (true) {
+        auto status = flow.status(result.id);
+        if (status == Status::Done) {
+            auto job = flow.get(result.id);
+            std::cout << "Result: " << job->content << std::endl;
+            break;
+        } else if (status == Status::Failed) {
+            auto err = flow.error(result.id);
+            std::cerr << "Job failed: " << err.value_or("Unknown") << std::endl;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    server.shutdown();
+    return 0;
+}
+```
+
+## Linking
+
+Link against the nrvna-ai library:
+
+```bash
+g++ -std=c++17 main.cpp -lnrvna -I/path/to/include
+```
+
+Or with CMake:
+
+```cmake
+find_package(nrvna CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE nrvna::nrvna)
+```

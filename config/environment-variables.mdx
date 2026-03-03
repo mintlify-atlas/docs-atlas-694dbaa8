@@ -1,0 +1,69 @@
+---
+title: Environment Variables
+description: Configuration options for nrvna-ai via environment variables
+---
+
+nrvna-ai is configured entirely through environment variables. Set these before starting the daemon to customize behavior.
+
+## Core Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NRVNA_WORKERS` | `4` | Number of worker threads for parallel inference |
+| `NRVNA_LOG_LEVEL` | `info` | Log verbosity level (see [Logging](/config/logging)) |
+| `NRVNA_MODELS_DIR` | `./models/` | Directory path to search for model files |
+
+## Model Parameters
+
+See [Model Parameters](/config/model-parameters) for detailed explanations.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NRVNA_GPU_LAYERS` | `99` (Mac) / `0` (other) | Number of model layers to offload to GPU |
+| `NRVNA_PREDICT` | `2048` | Maximum number of tokens to generate |
+| `NRVNA_MAX_CTX` | `8192` | Context window size (max tokens model can process) |
+| `NRVNA_TEMP` | `0.8` | Sampling temperature (0.0 - 2.0) |
+| `NRVNA_TOP_K` | `40` | Top-K sampling parameter |
+| `NRVNA_TOP_P` | `0.9` | Top-P (nucleus) sampling parameter |
+| `NRVNA_MIN_P` | `0.05` | Minimum probability threshold |
+| `NRVNA_REPEAT_PENALTY` | `1.1` | Penalty for repeating tokens |
+| `NRVNA_SEED` | `0` | Random seed for reproducibility (0 = random) |
+
+## llama.cpp Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLAMA_LOG_LEVEL` | - | llama.cpp log level: `error`, `warn`, `info`, `debug` |
+
+## Example Configuration
+
+```bash
+# High-performance setup with GPU acceleration
+export NRVNA_WORKERS=8
+export NRVNA_GPU_LAYERS=99
+export NRVNA_MAX_CTX=16384
+export NRVNA_PREDICT=4096
+export NRVNA_LOG_LEVEL=info
+
+# Start daemon
+nrvnad model.gguf workspace
+```
+
+```bash
+# Conservative setup for CPU-only inference
+export NRVNA_WORKERS=2
+export NRVNA_GPU_LAYERS=0
+export NRVNA_MAX_CTX=4096
+export NRVNA_PREDICT=1024
+export NRVNA_TEMP=0.7
+
+nrvnad model.gguf workspace
+```
+
+```bash
+# Debugging configuration
+export NRVNA_LOG_LEVEL=debug
+export LLAMA_LOG_LEVEL=info
+
+nrvnad model.gguf workspace
+```

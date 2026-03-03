@@ -1,0 +1,134 @@
+---
+title: Logging
+description: Configure logging levels and understand log output
+---
+
+nrvna-ai uses a thread-safe logging system with configurable verbosity levels.
+
+## Log Levels
+
+Set the log level via the `NRVNA_LOG_LEVEL` environment variable.
+
+| Level | Value | Description | Use Case |
+|-------|-------|-------------|----------|
+| `error` | `0` | Errors only | Production - minimal output |
+| `warn` | `1` | Warnings and errors | Production - catch issues |
+| `info` | `2` | General information | **Default** - normal operation |
+| `debug` | `3` | Detailed debugging | Development - troubleshooting |
+| `trace` | `4` | Very verbose tracing | Development - deep debugging |
+
+## Configuration
+
+### nrvna-ai Logs
+
+```bash
+# Set before starting the daemon
+export NRVNA_LOG_LEVEL=debug
+nrvnad model.gguf workspace
+```
+
+### llama.cpp Logs
+
+Control llama.cpp library logging separately:
+
+```bash
+export LLAMA_LOG_LEVEL=error  # Options: error, warn, info, debug
+```
+
+## Log Format
+
+All log messages follow this format:
+
+```
+[YYYY-MM-DD HH:MM:SS.mmm] [LEVEL] [ThreadName] Message
+```
+
+### Example Output
+
+```
+[2026-01-12 10:30:45.123] [INFO ] [Scanner] Found 3 ready jobs
+[2026-01-12 10:30:45.125] [INFO ] [Worker-0] Processing job: 1736700000_12345_0
+[2026-01-12 10:30:46.789] [INFO ] [Worker-0] Job completed: 1736700000_12345_0
+```
+
+## Thread Names
+
+Logs include thread context for easier debugging:
+
+- `Main` - Server main thread
+- `Scanner` - Directory scanning thread  
+- `Worker-N` - Worker threads (N = 0, 1, 2, ...)
+
+## Output Streams
+
+- **ERROR level**: Written to `stderr`
+- **All other levels**: Written to `stdout`
+
+This allows separating errors from normal logs:
+
+```bash
+# Capture errors separately
+nrvnad model.gguf workspace 2> errors.log
+
+# Capture all logs
+nrvnad model.gguf workspace > all.log 2>&1
+```
+
+## Thread Safety
+
+The logging system is fully thread-safe:
+
+- All log calls are mutex-protected
+- Safe to call from any thread
+- No interleaved output from concurrent threads
+
+## Implementation Reference
+
+Defined in `logger.hpp:11-16`:
+
+```cpp
+enum class LogLevel : uint8_t { 
+    ERROR = 0, 
+    WARN = 1, 
+    INFO = 2, 
+    DEBUG = 3, 
+    TRACE = 4 
+};
+```
+
+## Usage in Code
+
+For developers extending nrvna-ai:
+
+```cpp
+#include "nrvna/logger.hpp"
+
+LOG_ERROR("Something went wrong: " + error);
+LOG_WARN("Warning message");
+LOG_INFO("Informational message");
+LOG_DEBUG("Debug details");
+LOG_TRACE("Very detailed tracing");
+```
+
+## Recommended Settings
+
+### Development
+
+```bash
+export NRVNA_LOG_LEVEL=debug
+export LLAMA_LOG_LEVEL=info
+```
+
+### Production
+
+```bash
+export NRVNA_LOG_LEVEL=info
+export LLAMA_LOG_LEVEL=error
+```
+
+### Troubleshooting
+
+```bash
+export NRVNA_LOG_LEVEL=trace
+export LLAMA_LOG_LEVEL=debug
+```

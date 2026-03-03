@@ -1,0 +1,325 @@
+---
+title: 'Types and Enums'
+description: 'Core type definitions for the nrvna-ai C++ library'
+---
+
+## Overview
+
+This page documents the core types, enums, and structures used throughout the nrvna-ai library.
+
+```cpp
+#include <nrvna/types.hpp>
+```
+
+## Core Types
+
+### JobId
+
+```cpp
+using JobId = std::string;
+```
+
+Opaque identifier for a submitted job. Currently implemented as a string (UUID format), but may evolve to a strong type in future versions.
+
+**Example:**
+
+```cpp
+JobId id = "550e8400-e29b-41d4-a716-446655440000";
+std::cout << "Job ID: " << id << std::endl;
+```
+
+## Enums
+
+### Status
+
+```cpp
+enum class Status : std::uint8_t {
+    Queued,   // Job submitted, waiting for processing
+    Running,  // Job currently being processed
+    Done,     // Job completed successfully
+    Failed,   // Job failed with error
+    Missing   // Job not found in workspace
+};
+```
+
+Represents the lifecycle state of a job.
+
+<ParamField path="Queued" type="Status">
+  Job has been submitted and is waiting in the queue for processing
+</ParamField>
+
+<ParamField path="Running" type="Status">
+  Job is currently being processed by a worker thread
+</ParamField>
+
+<ParamField path="Done" type="Status">
+  Job completed successfully and result is available
+</ParamField>
+
+<ParamField path="Failed" type="Status">
+  Job processing failed and error message is available
+</ParamField>
+
+<ParamField path="Missing" type="Status">
+  Job ID not found in the workspace (may have been deleted or never existed)
+</ParamField>
+
+**Example:**
+
+```cpp
+Status status = flow.status(jobId);
+
+switch (status) {
+    case Status::Queued:
+        std::cout << "Waiting in queue" << std::endl;
+        break;
+    case Status::Running:
+        std::cout << "Processing..." << std::endl;
+        break;
+    case Status::Done:
+        std::cout << "Complete!" << std::endl;
+        break;
+    case Status::Failed:
+        std::cout << "Failed" << std::endl;
+        break;
+    case Status::Missing:
+        std::cout << "Not found" << std::endl;
+        break;
+}
+```
+
+### JobType
+
+```cpp
+enum class JobType : uint8_t {
+    Text = 0,   // Text generation
+    Embed = 1,  // Embedding generation
+    Vision = 2  // Vision/multimodal processing
+};
+```
+
+Specifies the type of inference job.
+
+<ParamField path="Text" type="JobType">
+  Text generation job - generates text response from prompt
+</ParamField>
+
+<ParamField path="Embed" type="JobType">
+  Embedding generation job - generates vector embedding from text
+</ParamField>
+
+<ParamField path="Vision" type="JobType">
+  Vision/multimodal job - processes images with text prompt
+</ParamField>
+
+**Example:**
+
+```cpp
+// Text generation
+auto result1 = work.submit("Hello", JobType::Text);
+
+// Embedding
+auto result2 = work.submit("Hello", JobType::Embed);
+
+// Vision (automatically set when using image overload)
+auto result3 = work.submit("Describe this", imagePaths);
+```
+
+### SubmissionError
+
+```cpp
+enum class SubmissionError : uint8_t {
+    None = 0,           // No error occurred
+    IoError,            // Filesystem I/O error
+    InvalidSize,        // Prompt exceeds maximum size
+    InvalidContent,     // Invalid prompt or image content
+    WorkspaceError      // Workspace not accessible or invalid
+};
+```
+
+Error codes for job submission failures.
+
+<ParamField path="None" type="SubmissionError">
+  No error - submission succeeded
+</ParamField>
+
+<ParamField path="IoError" type="SubmissionError">
+  Filesystem I/O error occurred (e.g., permission denied, disk full)
+</ParamField>
+
+<ParamField path="InvalidSize" type="SubmissionError">
+  Prompt size exceeds the configured maximum
+</ParamField>
+
+<ParamField path="InvalidContent" type="SubmissionError">
+  Prompt is empty, image files are invalid, or content is malformed
+</ParamField>
+
+<ParamField path="WorkspaceError" type="SubmissionError">
+  Workspace directory is inaccessible or cannot be created
+</ParamField>
+
+**Example:**
+
+```cpp
+auto result = work.submit(largePrompt);
+if (!result) {
+    switch (result.error) {
+        case SubmissionError::None:
+            // Won't happen when result.ok is false
+            break;
+        case SubmissionError::IoError:
+            std::cerr << "I/O error: " << result.message << std::endl;
+            break;
+        case SubmissionError::InvalidSize:
+            std::cerr << "Prompt too large" << std::endl;
+            break;
+        case SubmissionError::InvalidContent:
+            std::cerr << "Invalid content: " << result.message << std::endl;
+            break;
+        case SubmissionError::WorkspaceError:
+            std::cerr << "Workspace error: " << result.message << std::endl;
+            break;
+    }
+}
+```
+
+## Structures
+
+### SubmitResult
+
+```cpp
+struct SubmitResult {
+    bool ok = false;
+    JobId id;
+    SubmissionError error = SubmissionError::None;
+    std::string message;
+    explicit operator bool() const noexcept { return ok; }
+};
+```
+
+Result structure returned by `Work::submit()` methods.
+
+<ParamField path="ok" type="bool">
+  True if submission succeeded, false if it failed
+</ParamField>
+
+<ParamField path="id" type="JobId">
+  Generated job identifier (only valid when `ok` is true)
+</ParamField>
+
+<ParamField path="error" type="SubmissionError">
+  Error code if submission failed (SubmissionError::None if successful)
+</ParamField>
+
+<ParamField path="message" type="std::string">
+  Human-readable message describing success or failure
+</ParamField>
+
+**Example:**
+
+```cpp
+auto result = work.submit("Test prompt");
+
+// Check using operator bool
+if (result) {
+    std::cout << "Success! Job ID: " << result.id << std::endl;
+    std::cout << "Message: " << result.message << std::endl;
+} else {
+    std::cerr << "Failed with error " << static_cast<int>(result.error) << std::endl;
+    std::cerr << "Message: " << result.message << std::endl;
+}
+
+// Or check directly
+if (result.ok) {
+    // ...
+}
+```
+
+### Job
+
+```cpp
+struct Job {
+    JobId id;
+    Status status;
+    std::string content;
+    std::chrono::system_clock::time_point timestamp;
+};
+```
+
+Represents a job retrieved from the workspace.
+
+<ParamField path="id" type="JobId">
+  Unique identifier for the job
+</ParamField>
+
+<ParamField path="status" type="Status">
+  Current lifecycle state of the job
+</ParamField>
+
+<ParamField path="content" type="std::string">
+  Result content (if Done) or error message (if Failed). Empty for Queued/Running jobs.
+</ParamField>
+
+<ParamField path="timestamp" type="std::chrono::system_clock::time_point">
+  Job creation or completion timestamp
+</ParamField>
+
+**Example:**
+
+```cpp
+auto job = flow.latest();
+if (job) {
+    std::cout << "Job ID: " << job->id << std::endl;
+    
+    // Format timestamp
+    auto time_t = std::chrono::system_clock::to_time_t(job->timestamp);
+    std::cout << "Timestamp: " << std::ctime(&time_t);
+    
+    // Check status and content
+    if (job->status == Status::Done) {
+        std::cout << "Result: " << job->content << std::endl;
+    } else if (job->status == Status::Failed) {
+        std::cerr << "Error: " << job->content << std::endl;
+    }
+}
+```
+
+## Type Conversions
+
+### Status to String
+
+```cpp
+std::string statusToString(Status status) {
+    switch (status) {
+        case Status::Queued:  return "Queued";
+        case Status::Running: return "Running";
+        case Status::Done:    return "Done";
+        case Status::Failed:  return "Failed";
+        case Status::Missing: return "Missing";
+        default:              return "Unknown";
+    }
+}
+```
+
+### JobType to String
+
+```cpp
+std::string jobTypeToString(JobType type) {
+    switch (type) {
+        case JobType::Text:   return "Text";
+        case JobType::Embed:  return "Embed";
+        case JobType::Vision: return "Vision";
+        default:              return "Unknown";
+    }
+}
+```
+
+## Notes
+
+- All enums are **strongly typed** (`enum class`)
+- All enums use `uint8_t` as the underlying type for compact representation
+- `JobId` is currently a string alias but may become a strong type in the future
+- `SubmitResult` provides `operator bool()` for convenient success checking
+- The `Job` struct uses standard library types for broad compatibility
+- Timestamps use `std::chrono::system_clock` for portability

@@ -1,0 +1,171 @@
+---
+title: Model Parameters
+description: Fine-tune model behavior with sampling and generation parameters
+---
+
+Control how the model generates text by adjusting these parameters via environment variables.
+
+## Context and Generation
+
+### NRVNA_MAX_CTX
+
+**Default:** `8192`
+
+The context window size - maximum number of tokens the model can process at once. This includes both the input prompt and generated output.
+
+- Larger values allow longer prompts and conversations
+- Limited by model architecture and available memory
+- Common values: `2048`, `4096`, `8192`, `16384`, `32768`
+
+```bash
+export NRVNA_MAX_CTX=16384  # For long-context models
+```
+
+### NRVNA_PREDICT
+
+**Default:** `2048`
+
+Maximum number of tokens to generate in the response. Acts as a hard limit on output length.
+
+```bash
+export NRVNA_PREDICT=4096  # Allow longer responses
+```
+
+## GPU Configuration
+
+### NRVNA_GPU_LAYERS
+
+**Default:** `99` (macOS) / `0` (Linux/Windows)
+
+Number of model layers to offload to GPU for acceleration. Higher values use more VRAM but increase inference speed.
+
+- `0` = CPU-only inference
+- `99` = attempt to offload all layers (typical for full GPU usage)
+- Adjust based on available VRAM
+
+```bash
+export NRVNA_GPU_LAYERS=35  # Partial GPU offloading
+```
+
+## Sampling Parameters
+
+These control randomness and diversity in the generated text.
+
+### NRVNA_TEMP
+
+**Default:** `0.8`
+
+Sampling temperature controls randomness:
+
+- `0.0` = deterministic, always picks most likely token
+- `0.1-0.5` = focused, coherent output
+- `0.6-0.9` = balanced creativity and coherence
+- `1.0+` = highly random, creative but potentially incoherent
+
+```bash
+export NRVNA_TEMP=0.7  # Slightly more focused
+```
+
+### NRVNA_TOP_K
+
+**Default:** `40`
+
+Limits sampling to the top K most likely tokens. Lower values make output more focused.
+
+- `1` = always pick most likely (deterministic if temp=0)
+- `20-50` = balanced
+- Higher values increase diversity
+
+```bash
+export NRVNA_TOP_K=20  # More focused sampling
+```
+
+### NRVNA_TOP_P
+
+**Default:** `0.9`
+
+Nucleus sampling - considers tokens whose cumulative probability exceeds this threshold.
+
+- `0.5` = very focused
+- `0.9` = balanced (common default)
+- `1.0` = consider all tokens
+
+```bash
+export NRVNA_TOP_P=0.95  # Slightly more diverse
+```
+
+### NRVNA_MIN_P
+
+**Default:** `0.05`
+
+Minimum probability threshold. Tokens with probability below this are excluded from sampling.
+
+- `0.0` = no minimum
+- `0.05` = exclude very unlikely tokens
+- Higher values increase focus
+
+```bash
+export NRVNA_MIN_P=0.1  # More aggressive filtering
+```
+
+### NRVNA_REPEAT_PENALTY
+
+**Default:** `1.1`
+
+Penalty applied to tokens that were recently generated, reducing repetition.
+
+- `1.0` = no penalty
+- `1.1-1.2` = mild penalty (typical)
+- Higher values strongly discourage repetition
+
+```bash
+export NRVNA_REPEAT_PENALTY=1.15  # Stronger anti-repetition
+```
+
+### NRVNA_SEED
+
+**Default:** `0`
+
+Random seed for reproducible generation.
+
+- `0` = random seed each time (non-deterministic)
+- Any other value = fixed seed for reproducibility
+
+```bash
+export NRVNA_SEED=42  # Reproducible outputs
+```
+
+## Internal Configuration
+
+These parameters are defined in `runner.hpp:53-63` but not currently exposed as environment variables:
+
+- `repeat_last_n`: `64` - Number of recent tokens to consider for repeat penalty
+
+## Sampling Presets
+
+### Creative Writing
+
+```bash
+export NRVNA_TEMP=0.9
+export NRVNA_TOP_K=50
+export NRVNA_TOP_P=0.95
+export NRVNA_MIN_P=0.03
+```
+
+### Factual/Technical
+
+```bash
+export NRVNA_TEMP=0.3
+export NRVNA_TOP_K=20
+export NRVNA_TOP_P=0.85
+export NRVNA_MIN_P=0.1
+```
+
+### Balanced (Default)
+
+```bash
+export NRVNA_TEMP=0.8
+export NRVNA_TOP_K=40
+export NRVNA_TOP_P=0.9
+export NRVNA_MIN_P=0.05
+```

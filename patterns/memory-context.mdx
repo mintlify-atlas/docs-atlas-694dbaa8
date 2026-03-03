@@ -1,0 +1,95 @@
+---
+title: Memory & Context Accumulation
+description: Build up knowledge across multiple jobs for context-aware processing
+---
+
+## Problem
+
+You need to process multiple related tasks where later jobs should have access to the results of earlier ones. Each job should build on accumulated knowledge.
+
+## Solution
+
+Store job results in a persistent context file that grows over time. Each new job receives the entire accumulated memory as context.
+
+## Example
+
+Build knowledge across research tasks:
+
+```bash
+# Save results to memory
+flw ./workspace $job1 >> memory.txt
+flw ./workspace $job2 >> memory.txt
+flw ./workspace $job3 >> memory.txt
+
+# Use memory as context
+wrk ./workspace "Given this context:
+$(cat memory.txt)
+
+Answer: What's the best approach for a startup?"
+```
+
+## Agent Loop with Memory
+
+Continuous iteration with accumulated context:
+
+```bash
+GOAL="Write a Python tutorial covering variables, loops, and functions"
+memory=""
+
+for i in {1..5}; do
+  result=$(wrk ./workspace "Goal: $GOAL
+Previous work: $memory
+Continue. Write the next section. Say DONE if complete." | xargs flw ./workspace)
+
+  echo "=== Iteration $i ==="
+  echo "$result"
+
+  if echo "$result" | grep -q "DONE"; then
+    break
+  fi
+
+  memory="$memory\n---\n$result"
+done
+```
+
+## How It Works
+
+- Results are appended to a file (`memory.txt`)
+- The entire file is read and included in subsequent prompts
+- The model sees the full history and can reference previous work
+- The loop continues until a termination condition is met
+
+## Memory Management
+
+**Structured memory**:
+```bash
+# JSON format for structured data
+echo "{\"task\": \"research\", \"result\": \"$result\"}" >> memory.jsonl
+
+# Use jq to query
+cat memory.jsonl | jq -s '.' | wrk ./workspace "Analyze this data: $(cat -)"
+```
+
+**Selective memory**:
+```bash
+# Only keep the last N results
+tail -n 100 memory.txt > memory.tmp
+mv memory.tmp memory.txt
+```
+
+**Categorized memory**:
+```bash
+# Different memory files for different topics
+flw ./workspace $db_research >> memory_database.txt
+flw ./workspace $api_research >> memory_api.txt
+
+# Use relevant context only
+wrk ./workspace "Context: $(cat memory_database.txt)\nQuestion: Best DB for this use case?"
+```
+
+## Use Cases
+
+- **Multi-step research**: Each query builds on previous findings
+- **Iterative writing**: Continue long-form content across multiple jobs
+- **Session context**: Maintain conversation state across interactions
+- **Progressive refinement**: Gradually improve output based on accumulated feedback

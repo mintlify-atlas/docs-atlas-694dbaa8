@@ -1,0 +1,117 @@
+---
+title: Agent Loops
+description: Build iterative agent patterns with nrvna-ai
+---
+
+Create agents that iterate toward a goal, refining their work through multiple passes.
+
+## Basic Agent Loop
+
+Iterate until the task is complete:
+
+```bash
+GOAL="Write a Python tutorial covering variables, loops, and functions"
+memory=""
+
+for i in {1..5}; do
+  result=$(wrk ./workspace "Goal: $GOAL
+Previous work: $memory
+Continue. Write the next section. Say DONE if complete." | xargs flw ./workspace)
+
+  echo "=== Iteration $i ==="
+  echo "$result"
+
+  if echo "$result" | grep -q "DONE"; then
+    break
+  fi
+
+  memory="$memory\n---\n$result"
+done
+```
+
+### How It Works
+
+<Steps>
+  <Step title="Define the goal">
+    Set a clear objective and initialize memory to track progress.
+  </Step>
+  
+  <Step title="Loop with context">
+    Each iteration includes:
+    - The original goal
+    - All previous work in memory
+    - Instructions to continue or signal completion
+  </Step>
+  
+  <Step title="Check termination">
+    Break the loop when the agent signals it's done (e.g., outputs "DONE").
+  </Step>
+  
+  <Step title="Accumulate memory">
+    Append each result to memory for the next iteration.
+  </Step>
+</Steps>
+
+## Self-Refinement Loop
+
+Generate, critique, and improve:
+
+```bash
+GOAL="Write a cover letter for a senior engineer position"
+
+# First draft
+draft=$(wrk ./workspace "$GOAL" | xargs flw ./workspace)
+
+# Critique
+critique=$(wrk ./workspace "Critique this draft. What's weak? $draft" | xargs flw ./workspace)
+
+# Improve
+final=$(wrk ./workspace "Improve this draft based on feedback:
+Draft: $draft
+Feedback: $critique" | xargs flw ./workspace)
+
+echo "$final"
+```
+
+This three-step pattern (generate → critique → refine) produces higher-quality output than a single pass.
+
+## Event-Driven Agents
+
+Monitor job completions in real-time with `fswatch`:
+
+```bash
+# Terminal 1: Watch for results
+fswatch -0 ./workspace/output | while read -d '' path; do
+  [[ "$path" == */result.txt ]] && cat "$path"
+done
+
+# Terminal 2: Submit jobs
+wrk ./workspace "Question 1"
+wrk ./workspace "Question 2"
+```
+
+Results appear as soon as they're ready, enabling reactive workflows.
+
+## Context Management
+
+As loops run, context grows. Manage it carefully:
+
+1. **Summarize periodically** — condense memory every N iterations
+2. **Use sliding windows** — keep only the last N results
+3. **Increase context size** — if summaries lose important details:
+
+```bash
+export NRVNA_MAX_CTX=16384
+nrvnad model.gguf ./workspace
+```
+
+<Warning>
+Context windows are finite. Long loops may overflow. Monitor memory size and summarize when needed.
+</Warning>
+
+## Tips
+
+- **Clear termination conditions** — define when the agent should stop
+- **Structured memory** — use delimiters like `---` to separate iterations
+- **Limit iterations** — set a max count to prevent infinite loops
+- **Atomic state** — job location *is* job state; inspect with shell tools

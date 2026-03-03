@@ -1,0 +1,184 @@
+---
+title: Introduction
+description: Build agents, pipelines, and batch workflows with local LLMs using three simple commands
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Hero Dark"
+/>
+
+Build agents, pipelines, and batch workflows with local LLMs. Three commands. Filesystem is the queue. Shell is the orchestrator.
+
+```
+          wrk                    nrvnad                    flw
+           │                        │                        │
+   "prompt" ──▶ input/ready/ ──▶ processing/ ──▶ output/ ──▶ result
+           │                        │                        │
+       (submit)              (workers churn)            (collect)
+```
+
+No frameworks. No Python dependencies. Just three binaries that compose like Unix pipes — small enough to understand in minutes, powerful enough to build agent systems with shell scripts.
+
+## Three primitives
+
+<CardGroup cols={3}>
+  <Card
+    title="nrvnad"
+    icon="server"
+    href="#nrvnad"
+  >
+    Load a model, watch a workspace, process jobs
+  </Card>
+  <Card
+    title="wrk"
+    icon="paper-plane"
+    href="#wrk"
+  >
+    Submit a prompt, get back a job ID
+  </Card>
+  <Card
+    title="flw"
+    icon="download"
+    href="#flw"
+  >
+    Retrieve a result by job ID
+  </Card>
+</CardGroup>
+
+That's the entire API. Everything else is composition.
+
+### nrvnad
+
+The daemon loads a GGUF model and watches a workspace directory. It processes jobs asynchronously in the background.
+
+```bash
+# Interactive mode - pick a model and workspace
+nrvnad
+
+# Or start directly
+nrvnad model.gguf workspace
+```
+
+### wrk
+
+Submit work to a workspace. Returns immediately with a job ID.
+
+```bash
+JOB=$(wrk workspace "What is 2+2?")
+echo $JOB  # abc123
+```
+
+### flw
+
+Collect results from completed jobs.
+
+```bash
+flw workspace $JOB
+# Output: 4
+```
+
+## How it works
+
+Jobs are directories. State is location. Transitions are atomic renames.
+
+```
+workspace/
+├── input/ready/    ← queued jobs
+├── processing/     ← jobs being worked
+├── output/         ← completed results
+└── failed/         ← errors
+```
+
+<Note>
+No database. No message broker. No runtime dependencies. The filesystem is the coordination layer — you can inspect it with `ls`, debug it with `cat`, monitor it with `watch`.
+</Note>
+
+## What you can build
+
+The primitives are small. What you build with them isn't.
+
+### Agent loops
+
+Feed results back as prompts:
+
+```bash
+for i in {1..5}; do
+  result=$(wrk workspace "Continue: $memory" | xargs flw workspace -w)
+  memory="$memory\n$result"
+done
+```
+
+### Fan-out / fan-in
+
+Parallelize work, then synthesize:
+
+```bash
+a=$(wrk workspace "Research: databases")
+b=$(wrk workspace "Research: caching")
+c=$(wrk workspace "Research: queuing")
+wrk workspace "Synthesize: $(flw workspace $a) $(flw workspace $b) $(flw workspace $c)"
+```
+
+### Multi-model routing
+
+Different models for different tasks:
+
+```bash
+nrvnad qwen-vl.gguf   ws-vision    # mmproj auto-detected
+nrvnad codellama.gguf  ws-code
+nrvnad phi-3.gguf      ws-fast
+
+wrk ws-vision "Describe this" --image photo.jpg
+wrk ws-code   "Refactor: $(cat main.py)"
+wrk ws-fast   "Classify: bug or feature?"
+```
+
+### Batch processing
+
+Queue hundreds of jobs, workers churn through them:
+
+```bash
+for img in photos/*.jpg; do
+  wrk workspace "Caption this" --image "$img"
+done
+```
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Build and install nrvna-ai in minutes
+  </Card>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get running in 5 minutes
+  </Card>
+</CardGroup>
+
+## Platform support
+
+| Platform | Backend |
+|----------|----------|
+| macOS (Apple Silicon) | Metal GPU acceleration |
+| macOS (Intel) | CPU |
+| Linux | CPU, CUDA if available |
+
+## Requirements
+
+- macOS or Linux
+- CMake 3.16+ and a C++17 compiler
+- A GGUF model from [HuggingFace](https://huggingface.co/models?search=gguf)

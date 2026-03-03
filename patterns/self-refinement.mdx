@@ -1,0 +1,74 @@
+---
+title: Self-Refinement Loop
+description: Generate, critique, and improve content iteratively
+---
+
+## Problem
+
+First drafts are rarely perfect. You want the LLM to generate content, critically evaluate it, and produce an improved version based on feedback.
+
+## Solution
+
+The self-refinement loop uses a three-stage process:
+
+1. **Generate**: Create an initial draft
+2. **Critique**: Analyze weaknesses and areas for improvement
+3. **Improve**: Produce a refined version incorporating the feedback
+
+Each stage is a separate job, allowing the model to focus on one task at a time.
+
+## Example
+
+Refine a cover letter:
+
+```bash
+GOAL="Write a cover letter for a senior engineer position"
+
+# First draft
+draft=$(wrk ./workspace "$GOAL" | xargs flw ./workspace)
+
+# Critique
+critique=$(wrk ./workspace "Critique this draft. What's weak? $draft" | xargs flw ./workspace)
+
+# Improve
+final=$(wrk ./workspace "Improve this draft based on feedback:
+Draft: $draft
+Feedback: $critique" | xargs flw ./workspace)
+
+echo "$final"
+```
+
+## How It Works
+
+- `wrk ... | xargs flw` submits a job and immediately waits for the result
+- Each stage uses the previous output as context
+- The critique stage provides specific, actionable feedback
+- The improvement stage has both the original and the critique
+
+## Variations
+
+**Multiple iterations**:
+```bash
+for i in {1..3}; do
+  critique=$(wrk ./workspace "Critique: $draft" | xargs flw ./workspace)
+  draft=$(wrk ./workspace "Improve based on: $critique\n$draft" | xargs flw ./workspace)
+done
+```
+
+**Specialized critique**:
+```bash
+# Critique from different perspectives
+clarity=$(wrk ./workspace "Rate clarity: $draft" | xargs flw ./workspace)
+accuracy=$(wrk ./workspace "Rate technical accuracy: $draft" | xargs flw ./workspace)
+style=$(wrk ./workspace "Rate writing style: $draft" | xargs flw ./workspace)
+
+# Improve with all feedback
+final=$(wrk ./workspace "Improve this:\nDraft: $draft\nClarity: $clarity\nAccuracy: $accuracy\nStyle: $style" | xargs flw ./workspace)
+```
+
+## Use Cases
+
+- **Writing**: Essays, documentation, cover letters
+- **Code review**: Generate code, critique, refactor
+- **Design**: Create designs, evaluate, iterate
+- **Strategy**: Draft plans, identify gaps, revise

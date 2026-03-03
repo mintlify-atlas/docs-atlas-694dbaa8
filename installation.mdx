@@ -1,0 +1,141 @@
+---
+title: Installation
+description: Build and install nrvna-ai from source with vendored dependencies
+---
+
+nrvna-ai is built from source using CMake. All dependencies are vendored, including llama.cpp, so you don't need to install anything separately.
+
+## Requirements
+
+Before you begin, ensure you have:
+
+- macOS or Linux operating system
+- CMake 3.16 or higher
+- A C++17 compatible compiler (GCC, Clang, or Apple Clang)
+- Git (for cloning with submodules)
+
+<Note>
+On macOS with Apple Silicon, Metal GPU acceleration is automatically enabled. On Linux, CUDA support is detected and enabled if available.
+</Note>
+
+## Build from source
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone with the `--recursive` flag to include all submodules, including llama.cpp:
+
+    ```bash
+    git clone --recursive https://github.com/sanmathigb/nrvna-ai.git
+    cd nrvna-ai
+    ```
+
+    <Warning>
+    Don't forget the `--recursive` flag. If you already cloned without it, run:
+    ```bash
+    git submodule update --init --recursive
+    ```
+    </Warning>
+  </Step>
+
+  <Step title="Configure and build">
+    Use CMake to configure and build the project:
+
+    ```bash
+    cmake -S . -B build && cmake --build build -j4
+    ```
+
+    This creates a `build/` directory and compiles:
+    - `nrvnad` - the daemon that processes jobs
+    - `wrk` - the client for submitting work
+    - `flw` - the client for retrieving results
+    - llama.cpp and all dependencies
+
+    <Note>
+    The `-j4` flag uses 4 parallel jobs. Adjust based on your CPU cores (e.g., `-j8` for 8 cores).
+    </Note>
+  </Step>
+
+  <Step title="Install system-wide">
+    Install the binaries to your system:
+
+    ```bash
+    sudo cmake --install build
+    ```
+
+    This installs all three binaries (`nrvnad`, `wrk`, `flw`) to `/usr/local/bin` by default.
+  </Step>
+
+  <Step title="Verify installation">
+    Check that the binaries are installed and in your PATH:
+
+    <CodeGroup>
+    ```bash nrvnad
+    nrvnad --help
+    ```
+
+    ```bash wrk
+    wrk --help
+    ```
+
+    ```bash flw
+    flw --help
+    ```
+    </CodeGroup>
+
+    You should see help output for each command.
+  </Step>
+</Steps>
+
+## Build configuration
+
+The build system is configured via CMakeLists.txt with these key settings:
+
+- **C++ Standard**: C++17 (required)
+- **llama.cpp**: Built automatically as a submodule
+- **Multimodal support**: Enabled via mtmd library
+- **Compiler warnings**: `-Wall -Wextra -Wpedantic`
+
+### Custom install prefix
+
+To install to a different location:
+
+```bash
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/your/path
+cmake --build build -j4
+cmake --install build
+```
+
+## Get a model
+
+After installation, download a GGUF model to use with nrvna-ai:
+
+```bash
+mkdir -p models
+# Download any GGUF model from HuggingFace
+# Example: https://huggingface.co/models?search=gguf
+```
+
+Place your models in the `./models/` directory, or set the `NRVNA_MODELS_DIR` environment variable to point to your models:
+
+```bash
+export NRVNA_MODELS_DIR=/path/to/your/models
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get running in 5 minutes
+  </Card>
+  <Card
+    title="Introduction"
+    icon="book"
+    href="/introduction"
+  >
+    Learn about the core concepts
+  </Card>
+</CardGroup>

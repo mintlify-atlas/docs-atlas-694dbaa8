@@ -1,0 +1,340 @@
+---
+title: 'Server Class'
+description: 'API reference for the Server class - inference processing'
+---
+
+## Overview
+
+The `Server` class processes submitted jobs using AI models. It scans the workspace for pending jobs, executes inference using worker threads, and writes results back to the workspace.
+
+```cpp
+#include <nrvna/server.hpp>
+```
+
+## Class Definition
+
+```cpp
+namespace nrvnaai {
+    class Server final {
+    public:
+        Server(const std::string& modelPath, const std::filesystem::path& workspace, int workers = 4);
+        Server(const std::string& modelPath, const std::string& mmprojPath, const std::filesystem::path& workspace, int workers = 4);
+        ~Server();
+        
+        Server(const Server&) = delete;
+        Server& operator=(const Server&) = delete;
+        Server(Server&&) = delete;
+        Server& operator=(Server&&) = delete;
+        
+        [[nodiscard]] bool start();
+        void shutdown() noexcept;
+        [[nodiscard]] const std::filesystem::path& workspace() const noexcept;
+        [[nodiscard]] bool isRunning() const noexcept;
+    };
+}
+```
+
+## Constructors
+
+### Server (Text/Embed)
+
+```cpp
+Server(const std::string& modelPath, const std::filesystem::path& workspace, int workers = 4)
+```
+
+Constructs a server for text generation and embedding jobs.
+
+<ParamField path="modelPath" type="const std::string&" required>
+  Path to the GGUF model file
+</ParamField>
+
+<ParamField path="workspace" type="const std::filesystem::path&" required>
+  Path to the workspace directory to monitor and process
+</ParamField>
+
+<ParamField path="workers" type="int" default="4">
+  Number of worker threads for parallel job processing
+</ParamField>
+
+**Example:**
+
+```cpp
+// Default 4 workers
+Server server("/models/llama-7b.gguf", "/tmp/nrvna-workspace");
+
+// Custom worker count
+Server server("/models/llama-7b.gguf", "/tmp/nrvna-workspace", 8);
+```
+
+### Server (Vision)
+
+```cpp
+Server(const std::string& modelPath, const std::string& mmprojPath, const std::filesystem::path& workspace, int workers = 4)
+```
+
+Constructs a server for vision/multimodal jobs with separate model and projector files.
+
+<ParamField path="modelPath" type="const std::string&" required>
+  Path to the GGUF model file
+</ParamField>
+
+<ParamField path="mmprojPath" type="const std::string&" required>
+  Path to the multimodal projector file (for vision models)
+</ParamField>
+
+<ParamField path="workspace" type="const std::filesystem::path&" required>
+  Path to the workspace directory to monitor and process
+</ParamField>
+
+<ParamField path="workers" type="int" default="4">
+  Number of worker threads for parallel job processing
+</ParamField>
+
+**Example:**
+
+```cpp
+Server server(
+    "/models/llava-v1.5-7b.gguf",
+    "/models/llava-v1.5-7b-mmproj.gguf",
+    "/tmp/nrvna-workspace",
+    4
+);
+```
+
+## Methods
+
+### start
+
+```cpp
+[[nodiscard]] bool start()
+```
+
+Starts the server and begins processing jobs. Initializes the workspace, recovers orphaned jobs, and spawns worker threads.
+
+<ResponseField name="return" type="bool">
+  True if server started successfully, false if startup failed
+</ResponseField>
+
+**Example:**
+
+```cpp
+Server server("/models/model.gguf", "/tmp/nrvna-workspace");
+
+if (!server.start()) {
+    std::cerr << "Failed to start server" << std::endl;
+    return 1;
+}
+
+std::cout << "Server running" << std::endl;
+```
+
+### shutdown
+
+```cpp
+void shutdown() noexcept
+```
+
+Gracefully shuts down the server. Stops accepting new jobs, completes in-progress jobs, and joins all worker threads.
+
+**Example:**
+
+```cpp
+Server server("/models/model.gguf", "/tmp/nrvna-workspace");
+server.start();
+
+// ... do work ...
+
+std::cout << "Shutting down..." << std::endl;
+server.shutdown();
+std::cout << "Server stopped" << std::endl;
+```
+
+### workspace
+
+```cpp
+[[nodiscard]] const std::filesystem::path& workspace() const noexcept
+```
+
+Returns the workspace path being monitored.
+
+<ResponseField name="return" type="const std::filesystem::path&">
+  Reference to the workspace path
+</ResponseField>
+
+**Example:**
+
+```cpp
+Server server("/models/model.gguf", "/tmp/nrvna-workspace");
+std::cout << "Workspace: " << server.workspace() << std::endl;
+```
+
+### isRunning
+
+```cpp
+[[nodiscard]] bool isRunning() const noexcept
+```
+
+Checks if the server is currently running.
+
+<ResponseField name="return" type="bool">
+  True if server is running, false otherwise
+</ResponseField>
+
+**Example:**
+
+```cpp
+Server server("/models/model.gguf", "/tmp/nrvna-workspace");
+
+server.start();
+std::cout << "Running: " << server.isRunning() << std::endl;  // true
+
+server.shutdown();
+std::cout << "Running: " << server.isRunning() << std::endl;  // false
+```
+
+## Destructor
+
+```cpp
+~Server()
+```
+
+Destructor automatically calls `shutdown()` if the server is still running, ensuring graceful cleanup.
+
+**Example:**
+
+```cpp
+{
+    Server server("/models/model.gguf", "/tmp/nrvna-workspace");
+    server.start();
+    // ... work ...
+}  // Automatically shuts down here
+```
+
+## Usage Patterns
+
+### Basic Server Setup
+
+```cpp
+#include <nrvna/server.hpp>
+#include <iostream>
+
+int main() {
+    Server server("/models/llama-7b.gguf", "/tmp/nrvna-workspace", 4);
+    
+    if (!server.start()) {
+        std::cerr << "Failed to start server" << std::endl;
+        return 1;
+    }
+    
+    std::cout << "Server running at " << server.workspace() << std::endl;
+    
+    // Keep server running (e.g., until signal)
+    while (server.isRunning()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    
+    server.shutdown();
+    return 0;
+}
+```
+
+### Vision Server with Signal Handling
+
+```cpp
+#include <nrvna/server.hpp>
+#include <csignal>
+#include <atomic>
+
+std::atomic<bool> shutdown_requested{false};
+
+void signal_handler(int signal) {
+    shutdown_requested = true;
+}
+
+int main() {
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+    
+    Server server(
+        "/models/llava.gguf",
+        "/models/llava-mmproj.gguf",
+        "/tmp/nrvna-workspace",
+        8
+    );
+    
+    if (!server.start()) {
+        std::cerr << "Failed to start server" << std::endl;
+        return 1;
+    }
+    
+    std::cout << "Server started. Press Ctrl+C to stop." << std::endl;
+    
+    while (!shutdown_requested && server.isRunning()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    std::cout << "Shutting down gracefully..." << std::endl;
+    server.shutdown();
+    
+    return 0;
+}
+```
+
+### Multi-Server Setup
+
+```cpp
+// Run multiple servers with different models/workspaces
+Server textServer(
+    "/models/llama-7b.gguf",
+    "/tmp/nrvna-text",
+    4
+);
+
+Server visionServer(
+    "/models/llava.gguf",
+    "/models/llava-mmproj.gguf",
+    "/tmp/nrvna-vision",
+    2
+);
+
+if (!textServer.start() || !visionServer.start()) {
+    std::cerr << "Failed to start servers" << std::endl;
+    return 1;
+}
+
+// Both servers run independently
+```
+
+## Internal Behavior
+
+### Job Processing Pipeline
+
+1. **Scanner Thread**: Continuously scans workspace for new jobs
+2. **Job Queue**: New jobs are added to a thread-safe queue
+3. **Worker Pool**: Worker threads dequeue and process jobs in parallel
+4. **Result Writing**: Completed jobs write `result.txt` or `error.txt`
+5. **State Management**: Job directories are moved/renamed to reflect status
+
+### Orphaned Job Recovery
+
+On startup, the server recovers jobs that were marked as "running" but interrupted:
+
+- Jobs in running state are re-queued
+- Ensures no jobs are lost on server restart
+- Maintains job ordering and idempotency
+
+### Thread Safety
+
+- Internal state is protected by atomics and thread-safe data structures
+- Multiple servers can safely use different workspaces
+- **Do not** run multiple servers on the same workspace
+
+## Notes
+
+- The `Server` class is **non-copyable and non-movable**
+- Destructor automatically calls `shutdown()` for RAII compliance
+- Worker count should match available CPU cores for optimal performance
+- Model files are loaded once at startup and shared across workers
+- Vision models require both model and mmproj files
+- The workspace is created automatically if it doesn't exist
+- All methods except `shutdown()` use `[[nodiscard]]` attributes

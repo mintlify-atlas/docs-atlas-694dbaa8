@@ -1,0 +1,107 @@
+---
+title: Event-Driven Processing
+description: Monitor and react to job completions in real-time
+---
+
+## Problem
+
+You want to react to job completions as they happen, rather than polling or blocking. This is useful for long-running batch jobs or when you need to trigger actions based on results.
+
+## Solution
+
+Use filesystem watching tools like `fswatch` (macOS/Linux) or `inotifywait` (Linux) to monitor the workspace output directory. When a job completes, trigger processing immediately.
+
+## Example
+
+Monitor completions with `fswatch`:
+
+```bash
+# Terminal 1: Watch for results
+fswatch -0 ./workspace/output | while read -d '' path; do
+  [[ "$path" == */result.txt ]] && cat "$path"
+done
+
+# Terminal 2: Submit jobs
+wrk ./workspace "Question 1"
+wrk ./workspace "Question 2"
+```
+
+## Batch Processing with Events
+
+Submit many jobs and collect results as they complete:
+
+```bash
+# Submit 100 jobs in seconds
+for img in photos/*.jpg; do
+  wrk ./workspace "Caption this image" --image "$img" >> jobs.txt
+done
+
+# Check progress
+ls ./workspace/output/ | wc -l
+
+# Collect all results
+for job in $(cat jobs.txt); do
+  echo "=== $job ==="
+  flw ./workspace $job
+done
+```
+
+## Advanced Event Handling
+
+**Trigger subsequent jobs**:
+```bash
+fswatch -0 ./workspace/output | while read -d '' path; do
+  if [[ "$path" == */result.txt ]]; then
+    result=$(cat "$path")
+    # Submit follow-up job based on result
+    if echo "$result" | grep -q "needs_review"; then
+      wrk ./workspace "Review this: $result"
+    fi
+  fi
+done
+```
+
+**Log completions**:
+```bash
+fswatch -0 ./workspace/output | while read -d '' path; do
+  [[ "$path" == */result.txt ]] && {
+    echo "[$(date)] Job completed: $path" | tee -a completion.log
+  }
+done
+```
+
+**Parallel monitoring**:
+```bash
+# Watch multiple workspaces
+fswatch -0 ./ws-vision/output ./ws-code/output ./ws-fast/output | \
+while read -d '' path; do
+  workspace=$(echo "$path" | cut -d/ -f2)
+  echo "[$workspace] Completed: $(cat "$path")"
+done
+```
+
+## How It Works
+
+- `fswatch -0` watches directories for changes (null-terminated output)
+- `read -d ''` reads null-terminated paths
+- Pattern matching identifies completed jobs (`*/result.txt`)
+- Actions trigger immediately when files are written
+
+## Linux Alternative
+
+Using `inotifywait` on Linux:
+
+```bash
+inotifywait -m -e close_write --format '%w%f' ./workspace/output | \
+while read path; do
+  [[ "$path" == */result.txt ]] && cat "$path"
+done
+```
+
+## Use Cases
+
+- **Real-time processing**: React to results immediately
+- **Pipeline triggers**: Start next stage when previous completes
+- **Monitoring dashboards**: Display results as they arrive
+- **Progress tracking**: Update UI or logs in real-time
+- **Conditional workflows**: Different actions based on result content

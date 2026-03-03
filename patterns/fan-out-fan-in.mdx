@@ -1,0 +1,54 @@
+---
+title: Fan-Out / Fan-In Pattern
+description: Break a task into parallel subtasks and synthesize results
+---
+
+## Problem
+
+You have a complex task that can be broken into independent subtasks. Processing them sequentially would be slow, but you need to combine all results for a final answer.
+
+## Solution
+
+The fan-out/fan-in pattern (also known as map-reduce) lets you:
+
+1. **Fan-out**: Submit multiple independent jobs in parallel
+2. **Wait**: Collect results from all subtasks
+3. **Fan-in**: Synthesize the results into a final output
+
+Since `wrk` returns immediately and `flw` blocks until completion, you can parallelize the work while maintaining sequential synthesis.
+
+## Example
+
+Research a technology from multiple angles:
+
+```bash
+# Fan-out: submit subtasks
+job1=$(wrk ./workspace "Research: PostgreSQL scalability")
+job2=$(wrk ./workspace "Research: PostgreSQL ecosystem")
+job3=$(wrk ./workspace "Research: PostgreSQL vs MongoDB")
+
+# Wait for all
+result1=$(flw ./workspace $job1)
+result2=$(flw ./workspace $job2)
+result3=$(flw ./workspace $job3)
+
+# Fan-in: synthesize
+wrk ./workspace "Synthesize these findings into a recommendation:
+$result1
+$result2
+$result3"
+```
+
+## How It Works
+
+- Each `wrk` call returns a job ID immediately
+- The daemon processes jobs in parallel (up to `NRVNA_WORKERS`)
+- `flw` blocks until each job completes
+- The final synthesis job combines all results
+
+## Use Cases
+
+- **Research**: Investigate multiple aspects of a topic
+- **Analysis**: Process different data sources independently
+- **Comparison**: Evaluate multiple options in parallel
+- **Translation**: Process multiple languages simultaneously

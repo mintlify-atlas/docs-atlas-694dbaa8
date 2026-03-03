@@ -1,0 +1,156 @@
+---
+title: "nrvnad"
+description: "Daemon server for async inference processing"
+---
+
+`nrvnad` is the daemon server that loads an LLM model and processes inference jobs from a workspace directory.
+
+## Usage
+
+```bash
+nrvnad <model.gguf> <workspace>
+nrvnad <model.gguf> <workspace> [workers]
+nrvnad [--help | --version]
+```
+
+## Interactive Mode
+
+Run `nrvnad` without arguments to launch the interactive dashboard:
+
+```bash
+nrvnad
+```
+
+The dashboard displays:
+- Available workspaces with job status (queued, done, failed)
+- Available GGUF models in the models directory
+- Interactive selection prompts
+
+## Arguments
+
+<ParamField path="model" type="string" required>
+  Path to GGUF model file or model name to search for in the models directory.
+</ParamField>
+
+<ParamField path="workspace" type="string" required>
+  Directory path for job storage and processing. Will be created if it doesn't exist.
+</ParamField>
+
+<ParamField path="workers" type="number">
+  Number of concurrent workers (default: 4, range: 1-64).
+</ParamField>
+
+## Options
+
+<ParamField path="--mmproj" type="string">
+  Path to vision projection model (mmproj) for multimodal inference. Auto-detected if available.
+</ParamField>
+
+<ParamField path="-w, --workers" type="number">
+  Number of concurrent workers to run (1-64).
+</ParamField>
+
+<ParamField path="--workspace" type="string">
+  Specify workspace path via flag instead of positional argument.
+</ParamField>
+
+<ParamField path="-h, --help" type="boolean">
+  Display help message and interactive dashboard.
+</ParamField>
+
+<ParamField path="-v, --version" type="boolean">
+  Display version number.
+</ParamField>
+
+## Environment Variables
+
+<ParamField path="NRVNA_MODELS_DIR" type="string">
+  Custom directory for GGUF models. Defaults to `./models` or auto-detected relative to binary location.
+</ParamField>
+
+<ParamField path="NRVNA_LOG_LEVEL" type="string">
+  Log level: ERROR, WARN, INFO, DEBUG, TRACE (default: INFO in server mode, ERROR in interactive mode).
+</ParamField>
+
+<ParamField path="NRVNA_TEMP" type="number">
+  Sampling temperature. Auto-set based on model type if not provided:
+  - Code models: 0.3
+  - Reasoning models (DeepSeek, R1): 0.6
+</ParamField>
+
+## Examples
+
+### Start daemon with specific model
+
+```bash
+nrvnad qwen2.5-7b.gguf ./workspace
+```
+
+### Start with 8 workers
+
+```bash
+nrvnad llama-3.1-8b.gguf ./workspace 8
+```
+
+### Start with vision model
+
+```bash
+nrvnad llama-3.2-11b-vision.gguf ./workspace --mmproj llama-3.2-11b-mmproj.gguf
+```
+
+### Using flags
+
+```bash
+nrvnad --workers 8 --workspace ./workspace qwen2.5-coder-7b.gguf
+```
+
+### Model name search
+
+You can provide a partial model name and `nrvnad` will search the models directory:
+
+```bash
+nrvnad qwen ./workspace
+```
+
+Matches the first `.gguf` file containing "qwen" in the models directory.
+
+## Behavior
+
+### Model Resolution
+
+1. If the provided path exists, uses it directly
+2. Otherwise searches `NRVNA_MODELS_DIR` for `.gguf` files matching the provided string
+3. Excludes mmproj files from model search
+4. Returns first alphabetically sorted match
+
+### MMProj Auto-Detection
+
+When a model is loaded, `nrvnad` automatically searches for matching mmproj files:
+- Looks in the same directory as the model
+- Matches based on model filename stem
+- Prioritizes exact matches
+
+### Workspace Structure
+
+The daemon expects/creates this structure:
+```
+workspace/
+├── input/
+│   ├── ready/      # Jobs ready for processing
+│   └── writing/    # Jobs being written
+├── processing/     # Jobs currently running
+├── output/         # Completed jobs
+└── failed/         # Failed jobs
+```
+
+### PID Management
+
+The daemon writes its PID to `<workspace>/.nrvnad.pid` on startup and removes it on clean shutdown.
+
+## Signal Handling
+
+The daemon handles `SIGINT` and `SIGTERM` for graceful shutdown:
+
+```bash
+kill <pid>  # Graceful shutdown
+```
