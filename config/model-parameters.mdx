@@ -31,6 +31,20 @@ Maximum number of tokens to generate in the response. Acts as a hard limit on ou
 export NRVNA_PREDICT=4096  # Allow longer responses
 ```
 
+### NRVNA_BATCH
+
+**Default:** `2048`
+
+Batch size for token processing. This controls how many tokens are processed together during inference.
+
+- Higher values may improve throughput on GPUs
+- Limited by available memory
+- Typically matches context size for optimal performance
+
+```bash
+export NRVNA_BATCH=512  # Smaller batches for memory-constrained systems
+```
+
 ## GPU Configuration
 
 ### NRVNA_GPU_LAYERS
@@ -122,6 +136,19 @@ Penalty applied to tokens that were recently generated, reducing repetition.
 export NRVNA_REPEAT_PENALTY=1.15  # Stronger anti-repetition
 ```
 
+### NRVNA_REPEAT_LAST_N
+
+**Default:** `64`
+
+Number of previous tokens to consider when applying the repeat penalty. The model looks back this many tokens to detect repetition.
+
+- Lower values = shorter repetition detection window
+- Higher values = detect repetition further back in the output
+
+```bash
+export NRVNA_REPEAT_LAST_N=128  # Detect repetition further back
+```
+
 ### NRVNA_SEED
 
 **Default:** `0`
@@ -134,12 +161,6 @@ Random seed for reproducible generation.
 ```bash
 export NRVNA_SEED=42  # Reproducible outputs
 ```
-
-## Internal Configuration
-
-These parameters are defined in `runner.hpp:53-63` but not currently exposed as environment variables:
-
-- `repeat_last_n`: `64` - Number of recent tokens to consider for repeat penalty
 
 ## Sampling Presets
 
