@@ -1,0 +1,102 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "nrvna-ai",
+  "projectDescription": "Asynchronous inference primitive for building agent systems with local LLMs using filesystem-based job queues.",
+  "theme": "aspen",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4f46e5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/job-lifecycle",
+              "concepts/filesystem-queue",
+              "concepts/threading-model"
+            ]
+          },
+          {
+            "group": "CLI Tools",
+            "pages": [
+              "cli/nrvnad",
+              "cli/wrk",
+              "cli/flw"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/batch-processing",
+              "guides/agent-loops",
+              "guides/multi-model-routing",
+              "guides/vision-models",
+              "guides/embeddings"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "config/environment-variables",
+              "config/model-parameters",
+              "config/logging"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "C++ Library",
+            "pages": [
+              "api/overview",
+              "api/work",
+              "api/flow",
+              "api/server",
+              "api/types"
+            ]
+          },
+          {
+            "group": "Patterns",
+            "pages": [
+              "patterns/fan-out-fan-in",
+              "patterns/self-refinement",
+              "patterns/memory-context",
+              "patterns/event-driven"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Filesystem-based job queue with atomic state transitions",
+    "Three simple CLI tools: nrvnad (daemon), wrk (submit), flw (collect)",
+    "Built-in llama.cpp integration with Metal/CUDA support",
+    "Multi-model routing and parallel job processing",
+    "Vision and embedding support with GGUF models",
+    "Composable with shell scripts and Unix pipes"
+  ],
+  "publicApiSurface": [
+    "nrvnad - Daemon server that loads models and processes jobs",
+    "wrk - Submit text, vision, or embedding jobs",
+    "flw - Retrieve job results and status",
+    "Work::submit() - C++ API for job submission",
+    "Flow::get() - C++ API for result retrieval",
+    "Flow::status() - C++ API for job status",
+    "Server::start() - C++ API for starting inference server"
+  ]
+}
